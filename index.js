@@ -1,8 +1,14 @@
+
 function stringFromMemory(ptr, len) {
   if (!cachedTextDecoder) {
     cachedTextDecoder = new TextDecoder("utf-8");
   }
-  return cachedTextDecoder.decode(new Uint8Array(memory.buffer, ptr, len));
+  const memoryToUse = memory || (instance && instance.exports.memory);
+  if (!memoryToUse) {
+    console.error("Memory not available for stringFromMemory");
+    return "";
+  }
+  return cachedTextDecoder.decode(new Uint8Array(memoryToUse.buffer, ptr, len));
 }
 
 let memory;
@@ -11,8 +17,24 @@ let elementCache = [];
 let elementEventHandlers = new Map(); // Map to store event handlers
 let cachedTextDecoder = null;
 
-// fetch('target/wasm32-unknown-unknown/release/simple-virtual-dom.wasm')
-fetch("zig-out/bin/lib.wasm")
+// immediate renderer state
+let nodeStack = []; // Stack for building DOM tree
+let currentParent = null;
+
+function stringFromMemory(ptr, len) {
+  if (!cachedTextDecoder) {
+    cachedTextDecoder = new TextDecoder("utf-8");
+  }
+  if (!memory) {
+    console.error("Memory not available in stringFromMemory, ptr:", ptr, "len:", len);
+    return "";
+  }
+  const result = cachedTextDecoder.decode(new Uint8Array(memory.buffer, ptr, len));
+  return result;
+}
+const wasm_url = document.currentScript.getAttribute("data-wasm-url")
+const wasm_init_method = document.currentScript.getAttribute("data-wasm-init-method")
+fetch(wasm_url)
   .then((response) => response.arrayBuffer())
   .then((bytes) =>
     WebAssembly.instantiate(bytes, {
@@ -21,8 +43,7 @@ fetch("zig-out/bin/lib.wasm")
           console.log(stringFromMemory(start, len));
         },
         js_query_selector: function (start, len) {
-          const query = stringFromMemory(start, len);
-          const el = document.querySelector(query);
+          const el = document.querySelector(stringFromMemory(start, len));
           const index = elementCache.length;
           elementCache.push(el);
           return index;
@@ -91,7 +112,7 @@ fetch("zig-out/bin/lib.wasm")
             .set(event_name, { callback_ptr, ctx_ptr });
 
           element_ref.addEventListener(event_name, (event) => {
-            // Call the Zig function with the stored callback and context pointers
+            // Call the zig function with the stored callback and context pointers
             instance.exports.call_zig_callback(callback_ptr, ctx_ptr);
           });
         },
@@ -107,11 +128,72 @@ fetch("zig-out/bin/lib.wasm")
           const value = stringFromMemory(value_ptr, value_len);
           element_ref.setAttribute(name, value);
         },
+        
+        // immediate-mode functions
+        js_begin_render: function(parentId) {
+          const parent = elementCache[parentId];
+          // Clear existing content
+          parent.innerHTML = '';
+          currentParent = parent;
+          nodeStack = [parent];
+        },
+        js_create_element_immediate: function(tagPtr, tagLen) {
+          const tag = stringFromMemory(tagPtr, tagLen);
+          if (!tag || tag.trim() === '') {
+            console.error("Empty tag name received, ptr:", tagPtr, "len:", tagLen);
+            // Push a placeholder div instead of crashing
+            const element = document.createElement("div");
+            nodeStack.push(element);
+            return;
+          }
+          const element = document.createElement(tag);
+          nodeStack.push(element);
+        },
+        js_create_text_immediate: function(textPtr, textLen) {
+          const text = stringFromMemory(textPtr, textLen);
+          const textNode = document.createTextNode(text);
+          nodeStack.push(textNode);
+        },
+        js_set_attribute_immediate: function(namePtr, nameLen, valuePtr, valueLen) {
+          const name = stringFromMemory(namePtr, nameLen);
+          const value = stringFromMemory(valuePtr, valueLen);
+          const current = nodeStack[nodeStack.length - 1];
+          if (current.nodeType === 1) { // Element node
+            current.setAttribute(name, value);
+          }
+        },
+        js_add_event_immediate: function(eventPtr, eventLen, callbackPtr, ctxPtr) {
+          const eventName = stringFromMemory(eventPtr, eventLen);
+          const current = nodeStack[nodeStack.length - 1];
+          if (current.nodeType === 1) { // Element node
+            current.addEventListener(eventName, () => {
+              instance.exports.call_zig_callback(callbackPtr, ctxPtr);
+            });
+          }
+        },
+        js_append_child_immediate: function() {
+          if (nodeStack.length >= 2) {
+            const child = nodeStack.pop();
+            const parent = nodeStack[nodeStack.length - 1];
+            parent.appendChild(child);
+          }
+        },
+        js_end_render: function() {
+          // If there's exactly one root element left on the stack, append it to the parent
+          if (nodeStack.length === 2) { // parent + root element
+            const rootElement = nodeStack[1];
+            const parent = nodeStack[0];
+            parent.appendChild(rootElement);
+          }
+          nodeStack = [];
+          currentParent = null;
+        },
       },
     }),
   )
   .then((results) => {
     instance = results.instance;
     memory = results.instance.exports.memory;
-    results.instance.exports.init();
+    results.instance.exports[wasm_init_method]();
   });
+  

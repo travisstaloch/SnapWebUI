@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 /// DOM node handle type
 pub const NodeId = enum(i32) { null = std.math.minInt(i32), _ };
@@ -10,6 +11,11 @@ pub const EventHandler = struct {
     ctx: *anyopaque,
 
     pub const Callback = fn (*anyopaque) anyerror!void;
+
+    pub fn init(name: []const u8, callback: *const Callback, ctx: *anyopaque) EventHandler {
+        return .{ .name = name, .callback = callback, .ctx = ctx };
+    }
+    pub const e = init;
 };
 
 pub const Attribute = struct {
@@ -193,9 +199,10 @@ pub const Node = union(enum) {
 pub fn h(
     tag: []const u8,
     attributes: []const Attribute,
-    children: []const Node,
     events: []const EventHandler,
+    children: []const Node,
 ) Node {
+    assert(tag.len != 0);
     return .{ .element = .{
         .tag = tag,
         .attributes = attributes,
@@ -206,6 +213,12 @@ pub fn h(
 
 /// create virtual text node
 pub fn t(text: []const u8) Node {
+    return .{ .text = text };
+}
+
+/// create virtual formatted text node
+pub fn tf(buf: []u8, comptime fmt: []const u8, args: anytype) Node {
+    const text = std.fmt.bufPrint(buf, fmt, args) catch buf;
     return .{ .text = text };
 }
 
@@ -230,4 +243,98 @@ pub fn useState(
     subscriber: anytype,
 ) State(@TypeOf(state), @TypeOf(subscriber)) {
     return .{ .inner = state, .subscriber = subscriber };
+}
+
+// External JS functions
+pub extern fn js_query_selector(start: [*]const u8, len: usize) NodeId;
+pub extern fn js_log(start: [*]const u8, len: usize) void;
+// Immediate-mode rendering functions
+pub extern fn js_begin_render(parent_id: NodeId) void;
+pub extern fn js_create_element_immediate(tag_ptr: [*]const u8, tag_len: usize) void;
+pub extern fn js_create_text_immediate(text_ptr: [*]const u8, text_len: usize) void;
+pub extern fn js_set_attribute_immediate(name_ptr: [*]const u8, name_len: usize, value_ptr: [*]const u8, value_len: usize) void;
+pub extern fn js_add_event_immediate(event_ptr: [*]const u8, event_len: usize, callback_ptr: usize, ctx_ptr: usize) void;
+pub extern fn js_append_child_immediate() void;
+pub extern fn js_end_render() void;
+
+const is_wasm = @import("builtin").cpu.arch == .wasm32;
+
+/// create element immediately in browser DOM
+pub fn hi(
+    tag: []const u8,
+    attributes: []const Attribute,
+    events: []const EventHandler,
+    children: []const Node,
+) void {
+    if (!is_wasm) return;
+    js_create_element_immediate(tag.ptr, tag.len);
+
+    for (attributes) |attr| {
+        js_set_attribute_immediate(attr.name.ptr, attr.name.len, attr.value.ptr, attr.value.len);
+    }
+
+    for (events) |event| {
+        js_add_event_immediate(event.name.ptr, event.name.len, @intFromPtr(event.callback), @intFromPtr(event.ctx));
+    }
+
+    for (children) |child| {
+        switch (child) {
+            .empty => {},
+            .element => |ele| {
+                hi(ele.tag, ele.attributes, ele.events, ele.children);
+            },
+            .text => ti(child.text),
+        }
+    }
+
+    // This element is now complete, append it to parent
+    js_append_child_immediate();
+}
+
+/// create text node immediately in browser DOM
+pub fn ti(text: []const u8) void {
+    if (!is_wasm) return;
+    js_create_text_immediate(text.ptr, text.len);
+    js_append_child_immediate();
+}
+
+/// create formatted text node immediately in browser DOM
+pub fn tif(comptime fmt: []const u8, args: anytype) void {
+    var buf: [4096]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
+    ti(text);
+}
+
+/// return node_id result from document.querySelelctor()
+pub fn querySelector(selector: []const u8) NodeId {
+    return js_query_selector(selector.ptr, selector.len);
+}
+
+/// write message to console.log
+pub fn log(comptime fmt: []const u8, args: anytype) void {
+    if (!is_wasm) return;
+    var buf: [4096]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
+    js_log(msg.ptr, msg.len);
+}
+
+fn ErrUnionPayload(eu: type) type {
+    return switch (@typeInfo(eu)) {
+        .error_union => |u| u.payload,
+        else => unreachable,
+    };
+}
+
+/// unwrap error_union payload or else log and trap
+pub fn logErr(error_union: anytype) ErrUnionPayload(@TypeOf(error_union)) {
+    return error_union catch |e| {
+        log("error: {s}", .{@errorName(e)});
+        @trap();
+    };
+}
+
+/// execute callback in zig, passing context pointer
+export fn call_zig_callback(callback_ptr: usize, ctx_ptr: usize) void {
+    const callback: *const EventHandler.Callback = @ptrFromInt(callback_ptr);
+    logErr(callback(@ptrFromInt(ctx_ptr)));
 }
