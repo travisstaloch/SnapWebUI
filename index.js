@@ -32,8 +32,9 @@ function stringFromMemory(ptr, len) {
   const result = cachedTextDecoder.decode(new Uint8Array(memory.buffer, ptr, len));
   return result;
 }
-const wasm_url = document.currentScript.getAttribute("data-wasm-url")
-const wasm_init_method = document.currentScript.getAttribute("data-wasm-init-method")
+const wasm_url = document.currentScript.getAttribute("data-wasm-url");
+const wasm_init_method = document.currentScript.getAttribute("data-wasm-init-method");
+
 async function init() {
   fetch(wasm_url)
     .then((response) => response.arrayBuffer())
