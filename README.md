@@ -127,7 +127,7 @@ Include the generated WASM file and JavaScript bridge:
 The JavaScript bridge (`index.js`) provides:
 - DOM manipulation functions
 - Event system
-- Element caching with minimal memory management in Zig/Wasm.  99% of app memory lives in JS.
+- Element caching with minimal memory management in Zig/Wasm.  Most of app memory lives in JS.
 
 ## Architecture
 The library is designed around these core concepts:

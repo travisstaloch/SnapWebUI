@@ -9,14 +9,30 @@ pub const EventHandler = struct {
     name: []const u8,
     callback: *const Callback,
     ctx: *anyopaque,
+    data: usize = 0,
 
-    pub const Callback = fn (*anyopaque) anyerror!void;
+    pub const Callback = fn (*anyopaque, data: usize) anyerror!void;
 
     pub fn init(name: []const u8, callback: *const Callback, ctx: *anyopaque) EventHandler {
         return .{ .name = name, .callback = callback, .ctx = ctx };
     }
+
+    pub fn initWithData(name: []const u8, callback: *const Callback, ctx: *anyopaque, data: usize) EventHandler {
+        return .{ .name = name, .callback = callback, .ctx = ctx, .data = data };
+    }
+
+    pub fn format(self: EventHandler, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print(
+            \\callWasmCallback({}, {}, {})
+        , .{ @intFromPtr(self.callback), @intFromPtr(self.ctx), self.data });
+    }
+
     pub const e = init;
+    pub const ed = initWithData;
 };
+
+pub const eh = EventHandler.init;
+pub const ehd = EventHandler.initWithData;
 
 pub const Attribute = struct {
     name: []const u8,
@@ -30,14 +46,16 @@ pub const Attribute = struct {
     }
 };
 
+pub const Element = @FieldType(Node, "element");
+
 /// A virtual DOM node
 pub const Node = union(enum) {
     empty,
     element: struct {
         tag: []const u8,
         attributes: []const Attribute,
-        children: []const Node,
         events: []const EventHandler,
+        children: []const Node,
     },
     text: []const u8,
 
@@ -245,38 +263,109 @@ pub fn useState(
     return .{ .inner = state, .subscriber = subscriber };
 }
 
-// External JS functions
-pub extern fn js_query_selector(start: [*]const u8, len: usize) NodeId;
-pub extern fn js_log(start: [*]const u8, len: usize) void;
-// Immediate-mode rendering functions
-pub extern fn js_begin_render(parent_id: NodeId) void;
-pub extern fn js_create_element_immediate(tag_ptr: [*]const u8, tag_len: usize) void;
-pub extern fn js_create_text_immediate(text_ptr: [*]const u8, text_len: usize) void;
-pub extern fn js_set_attribute_immediate(name_ptr: [*]const u8, name_len: usize, value_ptr: [*]const u8, value_len: usize) void;
-pub extern fn js_add_event_immediate(event_ptr: [*]const u8, event_len: usize, callback_ptr: usize, ctx_ptr: usize) void;
-pub extern fn js_append_child_immediate() void;
-pub extern fn js_end_render() void;
-
+/// External JS functions
+pub const js = struct {
+    pub extern fn querySelector(start: [*]const u8, len: usize) NodeId;
+    pub extern fn consoleLog(start: [*]const u8, len: usize) void;
+    pub extern fn querySelectorValue(selector_ptr: [*]const u8, selector_len: usize, prop_ptr: [*]const u8, prop_len: usize, buf_ptr: [*]u8, buf_len: usize) usize;
+    // Immediate-mode rendering functions
+    pub extern fn beginRender(parent_id: NodeId) void;
+    pub extern fn createElementImmediate(tag_ptr: [*]const u8, tag_len: usize) void;
+    pub extern fn createTextImmediate(text_ptr: [*]const u8, text_len: usize) void;
+    pub extern fn createHtmlImmediate(html_ptr: [*]const u8, html_len: usize) void;
+    pub extern fn setAttributeImmediate(name_ptr: [*]const u8, name_len: usize, value_ptr: [*]const u8, value_len: usize) void;
+    pub extern fn addEventImmediate(event_ptr: [*]const u8, event_len: usize, callback_ptr: usize, ctx_ptr: usize, data: usize) void;
+    pub extern fn appendChildImmediate() void;
+    pub extern fn endRender() void;
+};
 const is_wasm = @import("builtin").cpu.arch == .wasm32;
 
-/// create element immediately in browser DOM
+/// begin creating element immediately in browser DOM
+pub fn hiBegin(
+    tag: []const u8,
+    attributes: []const Attribute,
+    events: []const EventHandler,
+) void {
+    if (!is_wasm) return;
+    js.createElementImmediate(tag.ptr, tag.len);
+
+    for (attributes) |attr| {
+        js.setAttributeImmediate(attr.name.ptr, attr.name.len, attr.value.ptr, attr.value.len);
+    }
+
+    for (events) |event| {
+        js.addEventImmediate(event.name.ptr, event.name.len, @intFromPtr(event.callback), @intFromPtr(event.ctx), event.data);
+    }
+}
+
+/// end creating element and append to parent
+pub fn hiEnd() void {
+    if (!is_wasm) return;
+    js.appendChildImmediate();
+}
+
+/// Builder for DOM construction
+pub const Builder = struct {
+    state: enum { start, elem } = .start,
+    /// Start an element with attributes and events
+    pub fn elem(
+        self: *Builder,
+        tag: []const u8,
+        attributes: []const Attribute,
+        events: []const EventHandler,
+    ) *Builder {
+        hiBegin(tag, attributes, events);
+        self.state = .elem;
+        return self;
+    }
+
+    /// Add text content
+    pub fn text(self: *Builder, txt: []const u8) *Builder {
+        ti(txt);
+        return self;
+    }
+
+    /// Add formatted text content
+    pub fn textf(self: *Builder, comptime fmt: []const u8, args: anytype) *Builder {
+        var buf: [4096]u8 = undefined;
+        const txt = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
+        ti(txt);
+        return self;
+    }
+
+    /// Render children using a function
+    pub fn children(self: *Builder, render_fn: fn (*Builder) void) *Builder {
+        render_fn(self);
+        hiEnd();
+        return self;
+    }
+
+    /// Render children using a method
+    pub fn childrenWith(
+        self: *Builder,
+        ctx: anytype,
+        render_fn: fn (@TypeOf(ctx), *Builder) void,
+    ) *Builder {
+        render_fn(ctx, self);
+        hiEnd();
+        return self;
+    }
+
+    /// End current element (for elements without children function)
+    pub fn end(self: *Builder) *Builder {
+        hiEnd();
+        return self;
+    }
+};
+
+/// create element with children immediately (for simple cases)
 pub fn hi(
     tag: []const u8,
     attributes: []const Attribute,
     events: []const EventHandler,
     children: []const Node,
 ) void {
-    if (!is_wasm) return;
-    js_create_element_immediate(tag.ptr, tag.len);
-
-    for (attributes) |attr| {
-        js_set_attribute_immediate(attr.name.ptr, attr.name.len, attr.value.ptr, attr.value.len);
-    }
-
-    for (events) |event| {
-        js_add_event_immediate(event.name.ptr, event.name.len, @intFromPtr(event.callback), @intFromPtr(event.ctx));
-    }
-
+    hiBegin(tag, attributes, events);
     for (children) |child| {
         switch (child) {
             .empty => {},
@@ -286,16 +375,14 @@ pub fn hi(
             .text => ti(child.text),
         }
     }
-
-    // This element is now complete, append it to parent
-    js_append_child_immediate();
+    hiEnd();
 }
 
 /// create text node immediately in browser DOM
 pub fn ti(text: []const u8) void {
     if (!is_wasm) return;
-    js_create_text_immediate(text.ptr, text.len);
-    js_append_child_immediate();
+    js.createTextImmediate(text.ptr, text.len);
+    js.appendChildImmediate();
 }
 
 /// create formatted text node immediately in browser DOM
@@ -305,9 +392,14 @@ pub fn tif(comptime fmt: []const u8, args: anytype) void {
     ti(text);
 }
 
-/// return node_id result from document.querySelelctor()
+/// return node_id result from document.querySelector()
 pub fn querySelector(selector: []const u8) NodeId {
-    return js_query_selector(selector.ptr, selector.len);
+    return js.querySelector(selector.ptr, selector.len);
+}
+
+pub fn querySelectorValue(selector: []const u8, prop: []const u8, buf: []u8) []const u8 {
+    const len = js.querySelectorValue(selector.ptr, selector.len, prop.ptr, prop.len, buf.ptr, buf.len);
+    return buf[0..len];
 }
 
 /// write message to console.log
@@ -315,7 +407,7 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
     if (!is_wasm) return;
     var buf: [4096]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
-    js_log(msg.ptr, msg.len);
+    js.consoleLog(msg.ptr, msg.len);
 }
 
 fn ErrUnionPayload(eu: type) type {
@@ -326,7 +418,7 @@ fn ErrUnionPayload(eu: type) type {
 }
 
 /// unwrap error_union payload or else log and trap
-pub fn logErr(error_union: anytype) ErrUnionPayload(@TypeOf(error_union)) {
+pub fn unwrapErr(error_union: anytype) ErrUnionPayload(@TypeOf(error_union)) {
     return error_union catch |e| {
         log("error: {s}", .{@errorName(e)});
         @trap();
@@ -334,7 +426,24 @@ pub fn logErr(error_union: anytype) ErrUnionPayload(@TypeOf(error_union)) {
 }
 
 /// execute callback in zig, passing context pointer
-export fn call_zig_callback(callback_ptr: usize, ctx_ptr: usize) void {
+export fn callZigCallback(callback_ptr: usize, ctx_ptr: usize, data: usize) void {
     const callback: *const EventHandler.Callback = @ptrFromInt(callback_ptr);
-    logErr(callback(@ptrFromInt(ctx_ptr)));
+    unwrapErr(callback(@ptrFromInt(ctx_ptr), data));
+}
+
+extern fn captureBacktrace() void;
+pub fn returnErrorHook() void {
+    const st = @errorReturnTrace().?;
+    if (st.index == 0) {
+        captureBacktrace();
+    }
+}
+
+pub fn renderTemplate(allocator: std.mem.Allocator, node_id: NodeId, comptime fmt: []const u8, args: anytype) void {
+    if (!is_wasm) return;
+    const html = unwrapErr(std.fmt.allocPrint(allocator, fmt, args));
+    js.beginRender(node_id);
+    js.createHtmlImmediate(html.ptr, html.len);
+    js.appendChildImmediate();
+    js.endRender();
 }
