@@ -16,6 +16,7 @@ let instance;
 let elementCache = [];
 let elementEventHandlers = new Map(); // Map to store event handlers
 let cachedTextDecoder = null;
+let lastError = null;
 
 // immediate renderer state
 let nodeStack = []; // Stack for building DOM tree
@@ -43,6 +44,12 @@ async function init() {
         env: {
           consoleLog: function (start, len) {
             console.log(stringFromMemory(start, len));
+          },
+          captureBacktrace: function() {
+            lastError = new Error().stack;
+          },
+          printCapturedBacktrace: function() {
+            console.log(lastError);
           },
           querySelector: function (start, len) {
             const el = document.querySelector(stringFromMemory(start, len));
@@ -143,6 +150,20 @@ async function init() {
             } else {
               return 0;
             }
+          },
+          getElementInnerHTML: function(selectorPtr, selectorLen, bufPtr, bufLen) {
+              const element = document.querySelector(stringFromMemory(selectorPtr, selectorLen));
+              if (element && typeof element.innerHTML !== 'undefined') {
+                  const value = element.innerHTML;
+                  const encoder = new TextEncoder();
+                  const encodedValue = encoder.encode(value);
+                  const wasmMemory = new Uint8Array(memory.buffer);
+                  const len = Math.min(encodedValue.length, bufLen);
+                  wasmMemory.set(encodedValue.subarray(0, len), bufPtr);
+                  return len;
+              } else {
+                  return 0;
+              }
           },
           
           // immediate-mode functions

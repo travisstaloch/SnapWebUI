@@ -9,6 +9,31 @@
 </head>
 
 <body>
+    <template id="app-template">
+      <h1>Snap Demo</h1>
+      <div class="app">
+        <h3>Counter</h3>
+        <div>
+          <button style="margin: 0.25rem" onclick="{eh__onDecClick}">-</button>
+          <button style="margin: 0.25rem" onclick="{eh__onIncClick}">+</button>
+          <span>count {count}</span>
+        </div>
+        <h3>Todos</h3>
+        <div class="add-todo-section">
+          <input type=text placeholder="Description..." id="new-todo" value="{input}" oninput="{eh__onNewTodoInput}" />
+          <button onclick="{eh__onAddTodoClick}">Add Todo</button>
+        </div>
+        <ul>{todos}</ul>
+      </div>
+    </template>
+    <template id="todo-item-template">
+      <li class="{class}">
+        <input id=todo{id} type=checkbox {checked} onchange="{eh__onTodoChange}" />
+        <label for=todo{id}>{text}</label>
+        <button onclick="{eh__onTodoDeleteClick}">Delete</button>
+      </li>
+    </template>
+
     <div id="app"></div>
     <script src="index.js" data-wasm-url="zig-out/bin/snap-demo.wasm" data-wasm-init-method="init"></script>
 </body>

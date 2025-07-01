@@ -1,5 +1,8 @@
 const std = @import("std");
+const mem = std.mem;
 const assert = std.debug.assert;
+const superhtml = @import("superhtml");
+const Span = superhtml.Span;
 
 /// DOM node handle type
 pub const NodeId = enum(i32) { null = std.math.minInt(i32), _ };
@@ -41,8 +44,9 @@ pub const Attribute = struct {
         return .{ .name = name, .value = value };
     }
     pub const a = init;
+    // unused
     pub fn eql(self: Attribute, other: Attribute) bool {
-        return std.mem.eql(u8, self.name, other.name) and std.mem.eql(u8, self.value, other.value);
+        return mem.eql(u8, self.name, other.name) and mem.eql(u8, self.value, other.value);
     }
 };
 
@@ -60,7 +64,7 @@ pub const Node = union(enum) {
     text: []const u8,
 
     pub fn format(self: Node, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        if (std.mem.eql(u8, fmt, "html")) {
+        if (mem.eql(u8, fmt, "html")) {
             try self.formatHtml(writer);
         } else {
             try self.formatDefault(writer, options);
@@ -87,12 +91,12 @@ pub const Node = union(enum) {
                 }
 
                 // Check if it's a self-closing tag
-                const self_closing = std.mem.eql(u8, element.tag, "br") or
-                    std.mem.eql(u8, element.tag, "hr") or
-                    std.mem.eql(u8, element.tag, "img") or
-                    std.mem.eql(u8, element.tag, "input") or
-                    std.mem.eql(u8, element.tag, "meta") or
-                    std.mem.eql(u8, element.tag, "link");
+                const self_closing = mem.eql(u8, element.tag, "br") or
+                    mem.eql(u8, element.tag, "hr") or
+                    mem.eql(u8, element.tag, "img") or
+                    mem.eql(u8, element.tag, "input") or
+                    mem.eql(u8, element.tag, "meta") or
+                    mem.eql(u8, element.tag, "link");
 
                 if (self_closing and element.children.len == 0) {
                     try writer.writeAll(" />");
@@ -157,45 +161,13 @@ pub const Node = union(enum) {
         }
     }
 
-    // pub fn format(self: Node, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-    //     _ = fmt; // autofix
-
-    //     switch (self) {
-    //         .empty => {
-    //             try writer.writeAll("Node.empty");
-    //         },
-    //         .element => |element| {
-    //             try writer.writeAll("Node.element{ .tag = \"");
-    //             try writer.writeAll(element.tag);
-    //             try writer.writeAll("\", .attributes = [");
-    //             for (element.attributes, 0..) |attr, i| {
-    //                 if (i > 0) try writer.writeAll(", ");
-    //                 try writer.print("{{ .name = \"{s}\", .value = \"{s}\" }}", .{ attr.name, attr.value });
-    //             }
-    //             try writer.writeAll("], .children = [");
-    //             for (element.children, 0..) |child, i| {
-    //                 if (i > 0) try writer.writeAll(", ");
-    //                 try child.format("", options, writer);
-    //             }
-    //             try writer.writeAll("], .events = [");
-    //             for (element.events, 0..) |event, i| {
-    //                 if (i > 0) try writer.writeAll(", ");
-    //                 try writer.print("{{ .name = \"{s}\", .callback = {*}, .ctx = {*} }}", .{ event.name, event.callback, event.ctx });
-    //             }
-    //             try writer.writeAll("] }");
-    //         },
-    //         .text => |text| {
-    //             try writer.print("Node.text(\"{s}\")", .{text});
-    //         },
-    //     }
-    // }
-
+    // unused
     pub fn eql(self: Node, other: Node) bool {
         if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
 
         return switch (self) {
             .empty => true,
-            .element => |s_el| std.mem.eql(u8, s_el.tag, other.element.tag) and
+            .element => |s_el| mem.eql(u8, s_el.tag, other.element.tag) and
                 s_el.attributes.len == other.element.attributes.len and
                 for (s_el.attributes, other.element.attributes) |s_attr, o_attr| {
                     if (!s_attr.eql(o_attr)) break false;
@@ -207,7 +179,7 @@ pub const Node = union(enum) {
             // TODO: Compare events?
             .text => |s_text| {
                 const o_text = other.text;
-                return std.mem.eql(u8, s_text, o_text);
+                return mem.eql(u8, s_text, o_text);
             },
         };
     }
@@ -245,6 +217,8 @@ pub fn State(T: type, Subscriber: type) type {
         inner: T,
         subscriber: Subscriber,
 
+        pub const Inner = T;
+
         pub fn set(self: *@This(), new_state: T) !void {
             self.inner = new_state;
             try self.invalidate();
@@ -268,6 +242,9 @@ pub const js = struct {
     pub extern fn querySelector(start: [*]const u8, len: usize) NodeId;
     pub extern fn consoleLog(start: [*]const u8, len: usize) void;
     pub extern fn querySelectorValue(selector_ptr: [*]const u8, selector_len: usize, prop_ptr: [*]const u8, prop_len: usize, buf_ptr: [*]u8, buf_len: usize) usize;
+    pub extern fn getElementInnerHTML(selector_ptr: [*]const u8, selector_len: usize, buf_ptr: [*]u8, buf_len: usize) usize;
+    pub extern fn captureBacktrace() void;
+    pub extern fn printCapturedBacktrace() void;
     // Immediate-mode rendering functions
     pub extern fn beginRender(parent_id: NodeId) void;
     pub extern fn createElementImmediate(tag_ptr: [*]const u8, tag_len: usize) void;
@@ -278,6 +255,7 @@ pub const js = struct {
     pub extern fn appendChildImmediate() void;
     pub extern fn endRender() void;
 };
+
 const is_wasm = @import("builtin").cpu.arch == .wasm32;
 
 /// begin creating element immediately in browser DOM
@@ -410,6 +388,14 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
     js.consoleLog(msg.ptr, msg.len);
 }
 
+pub fn panic(comptime fmt: []const u8, args: anytype) noreturn {
+    if (!is_wasm) return;
+    var buf: [4096]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
+    js.consoleLog(msg.ptr, msg.len);
+    @trap();
+}
+
 fn ErrUnionPayload(eu: type) type {
     return switch (@typeInfo(eu)) {
         .error_union => |u| u.payload,
@@ -421,6 +407,7 @@ fn ErrUnionPayload(eu: type) type {
 pub fn unwrapErr(error_union: anytype) ErrUnionPayload(@TypeOf(error_union)) {
     return error_union catch |e| {
         log("error: {s}", .{@errorName(e)});
+        js.printCapturedBacktrace();
         @trap();
     };
 }
@@ -431,19 +418,281 @@ export fn callZigCallback(callback_ptr: usize, ctx_ptr: usize, data: usize) void
     unwrapErr(callback(@ptrFromInt(ctx_ptr), data));
 }
 
-extern fn captureBacktrace() void;
-pub fn returnErrorHook() void {
-    const st = @errorReturnTrace().?;
-    if (st.index == 0) {
-        captureBacktrace();
+pub fn querySelectorInnerHTML(selector: []const u8, buf: []u8) [:0]const u8 {
+    const len = js.getElementInnerHTML(selector.ptr, selector.len, buf.ptr, buf.len);
+    buf[len] = 0;
+    return buf[0..len :0];
+}
+
+pub fn Renderable(T: type) type {
+    return struct {
+        template: ParsedTemplate,
+        args: T,
+
+        pub const is_snap_renderable = {};
+    };
+}
+
+pub fn renderable(template: ParsedTemplate, args: anytype) Renderable(@TypeOf(args)) {
+    return .{ .template = template, .args = args };
+}
+
+pub const RenderActionCallback = fn (ctx: *anyopaque) anyerror!void;
+pub fn RenderableAction(T: type) type {
+    return struct {
+        action: *const RenderActionCallback,
+        ctx: *anyopaque,
+        args: T,
+
+        pub const is_snap_renderable_action = {};
+    };
+}
+
+pub fn renderableAction(
+    action: *const RenderActionCallback,
+    ctx: *anyopaque,
+    args: anytype,
+) RenderableAction(@TypeOf(args)) {
+    return .{ .action = action, .ctx = ctx, .args = args };
+}
+
+pub fn renderTemplate(node_id: NodeId, r: anytype) void {
+    if (!is_wasm) return;
+    js.beginRender(node_id);
+    renderTemplateInner(r);
+    js.endRender();
+
+    // const html = unwrapErr(std.fmt.allocPrint(allocator, template, args));
+    // js.beginRender(node_id);
+    // js.createHtmlImmediate(html.ptr, html.len);
+    // js.appendChildImmediate();
+    // js.endRender();
+}
+
+fn resolveDynamicString(buf: []u8, spec_span: Span, r: anytype) ![]const u8 {
+    var specname = spec_span.slice(r.template.src);
+    if (specname.len >= 2 and specname[0] == '{' and specname[specname.len - 1] == '}') {
+        specname = specname[1 .. specname.len - 1];
+    }
+
+    const Fe = std.meta.FieldEnum(@TypeOf(r.args));
+    switch (std.meta.stringToEnum(Fe, specname) orelse
+        panic("template field '{s}' missing from args", .{specname})) {
+        inline else => |f| {
+            const field = @field(r.args, @tagName(f));
+            return switch (@typeInfo(@TypeOf(field))) {
+                .int => try std.fmt.bufPrint(buf, "{}", .{field}),
+                .pointer => |p| if (p.size == .slice) if (p.child == u8)
+                    field
+                else {
+                    panic("cannot use type {s} as string for field '{s}'", .{ @typeName(@TypeOf(field)), specname });
+                } else {
+                    panic("cannot use type {s} for field '{s}'", .{ @typeName(@TypeOf(field)), specname });
+                },
+                else => |info| panic("cannot use type {s} as string for field '{s}'", .{ @tagName(info), specname }),
+            };
+        },
     }
 }
 
-pub fn renderTemplate(allocator: std.mem.Allocator, node_id: NodeId, comptime fmt: []const u8, args: anytype) void {
-    if (!is_wasm) return;
-    const html = unwrapErr(std.fmt.allocPrint(allocator, fmt, args));
-    js.beginRender(node_id);
-    js.createHtmlImmediate(html.ptr, html.len);
-    js.appendChildImmediate();
-    js.endRender();
+fn resolveDynamicEventHandler(spec_span: Span, r: anytype) !EventHandler {
+    var specname = spec_span.slice(r.template.src);
+    if (specname.len >= 2 and specname[0] == '{' and specname[specname.len - 1] == '}') {
+        specname = specname[1 .. specname.len - 1];
+    }
+    if (mem.startsWith(u8, specname, "eh__")) specname = specname[4..];
+
+    const Fe = std.meta.FieldEnum(@TypeOf(r.args));
+    switch (std.meta.stringToEnum(Fe, specname) orelse
+        panic("template field '{s}' missing from args", .{specname})) {
+        inline else => |f| {
+            const field = @field(r.args, @tagName(f));
+            const Field = @TypeOf(field);
+            if (Field != EventHandler) {
+                panic("field '{s}' has type {s}, expected EventHandler", .{ specname, @typeName(Field) });
+            }
+            return field;
+        },
+    }
+}
+
+fn renderDynamicTextNode(spec_span: Span, r: anytype) !void {
+    const specname = spec_span.slice(r.template.src);
+    const Fe = std.meta.FieldEnum(@TypeOf(r.args));
+    switch (std.meta.stringToEnum(Fe, specname) orelse
+        panic("template field '{s}' missing from args", .{specname})) {
+        inline else => |f| {
+            const field = @field(r.args, @tagName(f));
+            switch (@typeInfo(@TypeOf(field))) {
+                .int => tif("{}", .{field}),
+                .pointer => |p| if (p.size == .slice) {
+                    if (p.child == u8) {
+                        js.createTextImmediate(field.ptr, field.len);
+                        js.appendChildImmediate();
+                    } else {
+                        panic("field '{s}' of type {s} cannot be rendered as a text node", .{ specname, @typeName(@TypeOf(field)) });
+                    }
+                } else panic("field '{s}' of type {s} cannot be rendered as a text node", .{ specname, @typeName(@TypeOf(field)) }),
+                .@"struct" => if (@hasDecl(@TypeOf(field), "is_snap_renderable")) {
+                    renderTemplateInner(field);
+                } else if (@hasDecl(@TypeOf(field), "is_snap_renderable_action")) {
+                    try field.action(field.ctx);
+                } else panic("field '{s}' of type {s} cannot be rendered as a text node", .{ specname, @typeName(@TypeOf(field)) }),
+                else => |info| panic("field '{s}' of type {s} cannot be rendered as a text node", .{ specname, @tagName(info) }),
+            }
+        },
+    }
+}
+
+pub fn renderTemplateInner(r: anytype) void {
+    var buf: [256]u8 = undefined;
+    for (r.template.instructions) |ri| {
+        switch (ri) {
+            .static_tag_open => |span| {
+                const tag = span.slice(r.template.src);
+                js.createElementImmediate(tag.ptr, tag.len);
+            },
+            // the current element is complete. append to parent.
+            .static_tag_close => js.appendChildImmediate(),
+            .static_text => |span| {
+                const text = span.slice(r.template.src);
+                js.createTextImmediate(text.ptr, text.len);
+                js.appendChildImmediate();
+            },
+            .static_attribute => |attr| {
+                const name = attr[0].slice(r.template.src);
+                const value = attr[1].slice(r.template.src);
+                js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
+            },
+            .dyn_text => |span| unwrapErr(renderDynamicTextNode(span, r)),
+            .static_dyn_attr => |spans| {
+                const name = spans[0].slice(r.template.src);
+                const value = spans[1];
+                const value_res = unwrapErr(resolveDynamicString(&buf, value, r));
+                js.setAttributeImmediate(name.ptr, name.len, value_res.ptr, value_res.len);
+            },
+            .dyn_static_attr => |spans| {
+                const name = unwrapErr(resolveDynamicString(&buf, spans[0], r));
+                const value = spans[1].slice(r.template.src);
+                js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
+            },
+            .dyn_dyn_attr => |spans| {
+                const name = unwrapErr(resolveDynamicString(&buf, spans[0], r));
+                var buf2: [256]u8 = undefined;
+                const value = unwrapErr(resolveDynamicString(&buf2, spans[1], r));
+                js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
+            },
+            .dyn_event => |span| {
+                const event = unwrapErr(resolveDynamicEventHandler(span, r));
+                js.addEventImmediate(event.name.ptr, event.name.len, @intFromPtr(event.callback), @intFromPtr(event.ctx), event.data);
+            },
+        }
+    }
+}
+
+pub const RenderInstruction = union(enum) {
+    // For static parts of the template
+    static_tag_open: Span,
+    static_tag_close,
+    static_text: Span,
+    static_attribute: [2]Span,
+
+    // dynamic parts reference `args` tuple by names
+    dyn_text: Span,
+    /// name is static, value is dynamic
+    static_dyn_attr: [2]Span,
+    /// name is dynamic, value is static
+    dyn_static_attr: [2]Span,
+    dyn_dyn_attr: [2]Span,
+    dyn_event: Span,
+};
+
+pub const ParsedTemplate = struct {
+    src: [:0]const u8,
+    instructions: []RenderInstruction,
+};
+
+pub fn parseTemplate(allocator: mem.Allocator, src: [:0]const u8) !ParsedTemplate {
+    var res = std.ArrayList(RenderInstruction).init(allocator);
+    errdefer res.deinit();
+    var tokenizer = superhtml.html.Tokenizer{ .language = .xml, .return_attrs = true };
+    while (tokenizer.next(src)) |token| {
+        switch (token) {
+            .tag_name => |tag_name| {
+                log("tag_name '{s}'\n", .{tag_name.slice(src)});
+                const i = mem.lastIndexOfNone(u8, src[0..tag_name.start], &std.ascii.whitespace) orelse 0;
+                switch (src[i]) {
+                    '<' => try res.append(.{ .static_tag_open = tag_name }),
+                    '/' => try res.append(.static_tag_close),
+                    else => std.debug.panic("is_close found unexpected character '{c}'", .{src[i]}),
+                }
+
+                // log("tag_name {s} is_close {}\n", .{ tag_name.slice(src), is_close });
+            },
+            // full tag with attrs.  ignore since this is duplicate as we're requesting attrs from superhtml.
+            .tag => |tag| {
+                log("tag '{s}' {}\n", .{ tag.span.slice(src), tag.kind });
+                if (tag.kind == .end_self or tag.kind == .start_self) unreachable;
+            },
+
+            .text => |span| {
+                var sn = span;
+                while (mem.indexOfScalar(u8, sn.slice(src), '{')) |i| {
+                    const p: Span = .{ .start = sn.start, .end = @intCast(sn.start + i) };
+                    log("prefix '{s}'\n", .{p.slice(src)});
+                    try res.append(.{ .static_text = p });
+                    const end: u32 = @intCast(mem.indexOfScalarPos(u8, sn.slice(src), i, '}').?);
+                    const spec: Span = .{ .start = sn.start + i + 1, .end = @intCast(sn.start + end) };
+                    log("spec '{s}'\n", .{spec.slice(src)});
+                    try res.append(.{ .dyn_text = spec });
+                    sn.start = spec.end + 1;
+                }
+                if (sn.start != sn.end) try res.append(.{ .static_text = sn });
+            },
+            .attr => |attr| {
+                const is_dyn_name = src[attr.name.start] == '{' and src[attr.name.end - 1] == '}';
+                const is_dyn_value = if (attr.value) |v|
+                    src[v.span.start] == '{' and src[v.span.end - 1] == '}'
+                else
+                    false;
+
+                log("attr {s}=\"{s}\" is_dyn {}/{}", .{
+                    attr.name.slice(src),
+                    if (attr.value) |v| v.span.slice(src) else "null",
+                    is_dyn_name,
+                    is_dyn_value,
+                });
+
+                const inst: RenderInstruction = if (is_dyn_name and is_dyn_value)
+                    .{ .dyn_dyn_attr = .{ attr.name, attr.value.?.span } }
+                else if (!is_dyn_name and is_dyn_value)
+                    if (mem.startsWith(u8, attr.value.?.span.slice(src), "{eh__"))
+                        .{ .dyn_event = attr.value.?.span }
+                    else
+                        .{ .static_dyn_attr = .{ attr.name, attr.value.?.span } }
+                else if (is_dyn_name and !is_dyn_value)
+                    .{ .dyn_static_attr = .{ attr.name, if (attr.value) |v|
+                        v.span
+                    else
+                        .{ .start = 0, .end = 0 } } }
+                else
+                    .{ .static_attribute = .{ attr.name, if (attr.value) |v|
+                        v.span
+                    else
+                        .{ .start = 0, .end = 0 } } };
+
+                try res.append(inst);
+            },
+            .parse_error => |parse_error| {
+                std.debug.panic("html parse error: {}\n", .{parse_error});
+                @trap();
+            },
+            .doctype, .comment => {},
+            // inline else => |payload, tag| {
+            //     log("TODO {s} {}\n", .{ @tagName(tag), payload });
+            //     @trap();
+            // },
+        }
+    }
+    return .{ .src = src, .instructions = try res.toOwnedSlice() };
 }
