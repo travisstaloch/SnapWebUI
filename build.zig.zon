@@ -1,0 +1,16 @@
+.{
+    .name = .snap_wasm_dom,
+    .version = "0.0.1",
+    .fingerprint = 0x6947aed7a40f4213,
+    .paths = .{ "src", "build.zig", "index.html", "index.js", "LICENSE", "README.md", "styles.css" },
+    .dependencies = .{
+        // .superhtml = .{
+        //     .url = "git+https://github.com/kristoff-it/superhtml/#13f5a2221cb748bbe50ad702e89362afd5b925a7",
+        //     .hash = "superhtml-0.4.0-Y7MdPI6YDQB8UaNuIEYnkPKvdFQ28Pz4aHOvklVcq8Xu",
+        // },
+        // .rem = .{
+        //     .url = "git+https://github.com/chadwain/rem#09296092033aae5c14db95b5a600ff16392e9027",
+        //     .hash = "rem-0.3.0-K3YxlLUFDgBPnXv6_y--d7ztxujL-uOMhD8yztAibBHb",
+        // },
+    },
+}

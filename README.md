@@ -6,8 +6,8 @@ Reactive immediate DOM rendering with Wasm in Zig.  Compiles to a small WebAssem
 
 - **DOM rendering**: simple immediate mode rendering
 - **Event System**: event handlers with callback support
-- **Reactive State**: state management and automatic re-rendering
-- **Templating**: with Zig's std library formatting and `snap.renderTemplate()`
+- **Reactive State**: state management with automatic re-rendering
+- **Templating**: with Zig std library formatting and `snap.renderTemplate()`
 
 ## Examples
 See [`src/snap-demo.zig`](src/snap-demo.zig) for a demo app with a counter and todos.
@@ -50,7 +50,6 @@ MIT License - see LICENSE file for details.
 
 - [ ] Component system architecture
 - [ ] Server-side rendering support
-- [ ] Performance optimizations
 - [ ] More comprehensive examples
 
 ---

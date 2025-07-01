@@ -3,7 +3,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const mod = b.addModule("snap", .{ .root_source_file = b.path("src/snap.zig"), .target = target, .optimize = optimize });
-    mod.addImport("superhtml", b.dependency("superhtml", .{ .target = target, .optimize = optimize }).module("superhtml"));
     const exe = b.addExecutable(.{
         .name = "snap-demo",
         .root_source_file = b.path("src/snap-demo.zig"),
@@ -25,5 +24,6 @@ fn addTest(b: *std.Build, path: []const u8, name: []const u8, target: anytype, o
     const run_tests = b.addRunArtifact(tests);
     const run_step = b.step(name, "run tests");
     run_step.dependOn(&run_tests.step);
+    b.installArtifact(tests);
     return run_tests;
 }

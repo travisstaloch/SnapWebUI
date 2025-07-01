@@ -1,8 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const assert = std.debug.assert;
-const superhtml = @import("superhtml");
-const Span = superhtml.Span;
+pub const Tokenizer = @import("tokenizer.zig");
 
 /// DOM node handle type
 pub const NodeId = enum(i32) { null = std.math.minInt(i32), _ };
@@ -407,7 +406,8 @@ fn ErrUnionPayload(eu: type) type {
 pub fn unwrapErr(error_union: anytype) ErrUnionPayload(@TypeOf(error_union)) {
     return error_union catch |e| {
         log("error: {s}", .{@errorName(e)});
-        js.printCapturedBacktrace();
+        if (is_wasm)
+            js.printCapturedBacktrace();
         @trap();
     };
 }
@@ -468,6 +468,8 @@ pub fn renderTemplate(node_id: NodeId, r: anytype) void {
     // js.appendChildImmediate();
     // js.endRender();
 }
+
+const Span = Tokenizer.Span; // struct { start: u32, end: u32 };
 
 fn resolveDynamicString(buf: []u8, spec_span: Span, r: anytype) ![]const u8 {
     var specname = spec_span.slice(r.template.src);
@@ -615,28 +617,31 @@ pub const ParsedTemplate = struct {
 pub fn parseTemplate(allocator: mem.Allocator, src: [:0]const u8) !ParsedTemplate {
     var res = std.ArrayList(RenderInstruction).init(allocator);
     errdefer res.deinit();
-    var tokenizer = superhtml.html.Tokenizer{ .language = .xml, .return_attrs = true };
-    while (tokenizer.next(src)) |token| {
-        switch (token) {
-            .tag_name => |tag_name| {
-                log("tag_name '{s}'\n", .{tag_name.slice(src)});
-                const i = mem.lastIndexOfNone(u8, src[0..tag_name.start], &std.ascii.whitespace) orelse 0;
-                switch (src[i]) {
-                    '<' => try res.append(.{ .static_tag_open = tag_name }),
-                    '/' => try res.append(.static_tag_close),
-                    else => std.debug.panic("is_close found unexpected character '{c}'", .{src[i]}),
-                }
+    var tokenizer = Tokenizer{};
+    var last_attr_name: ?Span = null;
+    var last_attr_value: ?Span = null;
+
+    while (true) {
+        const token = tokenizer.next(src);
+        log("{s}: {s}", .{ @tagName(token.tag), token.span.slice(src) });
+        switch (token.tag) {
+            .eof, .invalid => break,
+            .tag_name => {
+                log("tag_name '{s}'\n", .{token.span.slice(src)});
+                try res.append(.{ .static_tag_open = token.span });
+                // const i = mem.lastIndexOfNone(u8, src[0..tag_name.span.start], &std.ascii.whitespace) orelse 0;
+                // switch (src[i]) {
+                //     '<' => try res.append(.{ .static_tag_open = tag_name }),
+                //     '/' => try res.append(.static_tag_close),
+                //     else => std.debug.panic("is_close found unexpected character '{c}'", .{src[i]}),
+                // }
 
                 // log("tag_name {s} is_close {}\n", .{ tag_name.slice(src), is_close });
             },
-            // full tag with attrs.  ignore since this is duplicate as we're requesting attrs from superhtml.
-            .tag => |tag| {
-                log("tag '{s}' {}\n", .{ tag.span.slice(src), tag.kind });
-                if (tag.kind == .end_self or tag.kind == .start_self) unreachable;
-            },
+            .tag_end_name, .tag_self_close => try res.append(.static_tag_close),
 
-            .text => |span| {
-                var sn = span;
+            .text => {
+                var sn = token.span;
                 while (mem.indexOfScalar(u8, sn.slice(src), '{')) |i| {
                     const p: Span = .{ .start = sn.start, .end = @intCast(sn.start + i) };
                     log("prefix '{s}'\n", .{p.slice(src)});
@@ -649,45 +654,53 @@ pub fn parseTemplate(allocator: mem.Allocator, src: [:0]const u8) !ParsedTemplat
                 }
                 if (sn.start != sn.end) try res.append(.{ .static_text = sn });
             },
-            .attr => |attr| {
-                const is_dyn_name = src[attr.name.start] == '{' and src[attr.name.end - 1] == '}';
-                const is_dyn_value = if (attr.value) |v|
-                    src[v.span.start] == '{' and src[v.span.end - 1] == '}'
-                else
-                    false;
-
-                log("attr {s}=\"{s}\" is_dyn {}/{}", .{
-                    attr.name.slice(src),
-                    if (attr.value) |v| v.span.slice(src) else "null",
-                    is_dyn_name,
-                    is_dyn_value,
-                });
-
-                const inst: RenderInstruction = if (is_dyn_name and is_dyn_value)
-                    .{ .dyn_dyn_attr = .{ attr.name, attr.value.?.span } }
-                else if (!is_dyn_name and is_dyn_value)
-                    if (mem.startsWith(u8, attr.value.?.span.slice(src), "{eh__"))
-                        .{ .dyn_event = attr.value.?.span }
+            .attr_name => {
+                if (last_attr_name) |attr_name| {
+                    const is_dyn_name = src[attr_name.start] == '{' and src[attr_name.end - 1] == '}';
+                    const is_dyn_value = if (last_attr_value) |v|
+                        src[v.start] == '{' and src[v.end - 1] == '}'
                     else
-                        .{ .static_dyn_attr = .{ attr.name, attr.value.?.span } }
-                else if (is_dyn_name and !is_dyn_value)
-                    .{ .dyn_static_attr = .{ attr.name, if (attr.value) |v|
-                        v.span
-                    else
-                        .{ .start = 0, .end = 0 } } }
-                else
-                    .{ .static_attribute = .{ attr.name, if (attr.value) |v|
-                        v.span
-                    else
-                        .{ .start = 0, .end = 0 } } };
+                        false;
 
-                try res.append(inst);
+                    log("attr {s}=\"{s}\" is_dyn {}/{}", .{
+                        attr_name.slice(src),
+                        if (last_attr_value) |v| v.slice(src) else "null",
+                        is_dyn_name,
+                        is_dyn_value,
+                    });
+
+                    const inst: RenderInstruction = if (is_dyn_name and is_dyn_value)
+                        .{ .dyn_dyn_attr = .{ attr_name, last_attr_value.? } }
+                    else if (!is_dyn_name and is_dyn_value)
+                        if (mem.startsWith(u8, last_attr_value.?.slice(src), "{eh__"))
+                            .{ .dyn_event = last_attr_value.? }
+                        else
+                            .{ .static_dyn_attr = .{ attr_name, last_attr_value.? } }
+                    else if (is_dyn_name and !is_dyn_value)
+                        .{ .dyn_static_attr = .{ attr_name, if (last_attr_value) |v|
+                            v
+                        else
+                            .{ .start = 0, .end = 0 } } }
+                    else
+                        .{ .static_attribute = .{ attr_name, if (last_attr_value) |v|
+                            v
+                        else
+                            .{ .start = 0, .end = 0 } } };
+
+                    try res.append(inst);
+                    last_attr_value = null;
+                }
+                last_attr_name = token.span;
             },
-            .parse_error => |parse_error| {
-                std.debug.panic("html parse error: {}\n", .{parse_error});
-                @trap();
-            },
-            .doctype, .comment => {},
+            .attr_value => last_attr_value = token.span,
+
+            // .parse_error => |parse_error| {
+            //     std.debug.panic("html parse error: {s}\n", .{parse_error});
+            //     @trap();
+            // },
+            .doctype,
+            .comment,
+            => {},
             // inline else => |payload, tag| {
             //     log("TODO {s} {}\n", .{ @tagName(tag), payload });
             //     @trap();
