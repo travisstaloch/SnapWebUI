@@ -237,6 +237,7 @@ async function init() {
       instance = results.instance;
       memory = results.instance.exports.memory;
       results.instance.exports[wasm_init_method]();
+      console.log("WASM init method called:", wasm_init_method);
     });
   }
 
