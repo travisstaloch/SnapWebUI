@@ -26,56 +26,50 @@ pub const InstructionId = packed struct(u32) {
     }
 };
 
-/// Structure-of-Arrays template representation
+/// SOA html document encoding with payloads each instruction type
+/// Each array is indexed by the payload_index from InstructionId
 pub const EncodedTemplate = struct {
-    /// Sequence of instruction IDs
     instructions: []InstructionId,
-
     /// String data storage
     strings: []u8,
-
-    /// Payloads for different instruction types
-    /// Each array is indexed by the payload_index from InstructionId
-    /// For static_tag_open: string offsets into strings buffer
     tag_opens: []StringRef,
-
-    /// For static_text: string offsets into strings buffer
     texts: []StringRef,
-
-    /// For static_attribute: pairs of string offsets [name, value]
+    /// [name, value]
     static_attrs: [][2]StringRef,
-
-    /// For dyn_text: string offsets for field names
+    /// string offsets for field names
     dyn_texts: []StringRef,
-
-    /// For static_dyn_attr: [static_name, dyn_field_name]
+    /// [static_name, dyn_field_name]
     static_dyn_attrs: [][2]StringRef,
-
-    /// For dyn_static_attr: [dyn_field_name, static_value]
+    /// [dyn_field_name, static_value]
     dyn_static_attrs: [][2]StringRef,
-
-    /// For dyn_dyn_attr: [dyn_field_name1, dyn_field_name2]
+    /// [dyn_field_name1, dyn_field_name2]
     dyn_dyn_attrs: [][2]StringRef,
-
-    /// For dyn_event: [event_name, handler_field_name]
+    /// [event_name, handler_field_name]
     dyn_events: [][2]StringRef,
+    // If not null, this owns the memory for all slices.
+    bytes: ?[]u8 = null,
 
     pub fn deinit(self: *EncodedTemplate, allocator: Allocator) void {
-        allocator.free(self.instructions);
-        allocator.free(self.strings);
-        allocator.free(self.tag_opens);
-        allocator.free(self.texts);
-        allocator.free(self.static_attrs);
-        allocator.free(self.dyn_texts);
-        allocator.free(self.static_dyn_attrs);
-        allocator.free(self.dyn_static_attrs);
-        allocator.free(self.dyn_dyn_attrs);
-        allocator.free(self.dyn_events);
+        if (self.bytes) |bytes| {
+            allocator.free(bytes);
+        } else {
+            // For templates built with TemplateBuilder
+            allocator.free(self.instructions);
+            allocator.free(self.strings);
+            allocator.free(self.tag_opens);
+            allocator.free(self.texts);
+            allocator.free(self.static_attrs);
+            allocator.free(self.dyn_texts);
+            allocator.free(self.static_dyn_attrs);
+            allocator.free(self.dyn_static_attrs);
+            allocator.free(self.dyn_dyn_attrs);
+            allocator.free(self.dyn_events);
+        }
     }
 };
 
 /// Reference to a string in the strings buffer
-pub const StringRef = struct {
+pub const StringRef = packed struct {
     offset: u32,
     len: u32,
 
@@ -84,138 +78,179 @@ pub const StringRef = struct {
     }
 };
 
-/// Builder for constructing EncodedTemplate
-pub const TemplateBuilder = struct {
-    allocator: Allocator,
-
-    instructions: std.ArrayList(InstructionId),
-    strings: std.ArrayList(u8),
-
-    tag_opens: std.ArrayList(StringRef),
-    texts: std.ArrayList(StringRef),
-    static_attrs: std.ArrayList([2]StringRef),
-    dyn_texts: std.ArrayList(StringRef),
-    static_dyn_attrs: std.ArrayList([2]StringRef),
-    dyn_static_attrs: std.ArrayList([2]StringRef),
-    dyn_dyn_attrs: std.ArrayList([2]StringRef),
-    dyn_events: std.ArrayList([2]StringRef),
-
-    pub fn init(allocator: Allocator) TemplateBuilder {
-        return .{
-            .allocator = allocator,
-            .instructions = std.ArrayList(InstructionId).init(allocator),
-            .strings = std.ArrayList(u8).init(allocator),
-            .tag_opens = std.ArrayList(StringRef).init(allocator),
-            .texts = std.ArrayList(StringRef).init(allocator),
-            .static_attrs = std.ArrayList([2]StringRef).init(allocator),
-            .dyn_texts = std.ArrayList(StringRef).init(allocator),
-            .static_dyn_attrs = std.ArrayList([2]StringRef).init(allocator),
-            .dyn_static_attrs = std.ArrayList([2]StringRef).init(allocator),
-            .dyn_dyn_attrs = std.ArrayList([2]StringRef).init(allocator),
-            .dyn_events = std.ArrayList([2]StringRef).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *TemplateBuilder) void {
-        self.instructions.deinit();
-        self.strings.deinit();
-        self.tag_opens.deinit();
-        self.texts.deinit();
-        self.static_attrs.deinit();
-        self.dyn_texts.deinit();
-        self.static_dyn_attrs.deinit();
-        self.dyn_static_attrs.deinit();
-        self.dyn_dyn_attrs.deinit();
-        self.dyn_events.deinit();
-    }
-
-    fn addString(self: *TemplateBuilder, str: []const u8) !StringRef {
-        const offset: u32 = @intCast(self.strings.items.len);
-        try self.strings.appendSlice(str);
-        return StringRef{ .offset = offset, .len = @intCast(str.len) };
-    }
-
-    pub fn addStaticTagOpen(self: *TemplateBuilder, tag: []const u8) !void {
-        const str_ref = try self.addString(tag);
-        const payload_index: u24 = @intCast(self.tag_opens.items.len);
-        try self.tag_opens.append(str_ref);
-        try self.instructions.append(InstructionId.init(.static_tag_open, payload_index));
-    }
-
-    pub fn addStaticTagClose(self: *TemplateBuilder) !void {
-        try self.instructions.append(InstructionId.init(.static_tag_close, 0));
-    }
-
-    pub fn addSelfClosingTag(self: *TemplateBuilder) !void {
-        try self.instructions.append(InstructionId.init(.self_closing_tag, 0));
-    }
-
-    pub fn addStaticText(self: *TemplateBuilder, text: []const u8) !void {
-        const str_ref = try self.addString(text);
-        const payload_index: u24 = @intCast(self.texts.items.len);
-        try self.texts.append(str_ref);
-        try self.instructions.append(InstructionId.init(.static_text, payload_index));
-    }
-
-    pub fn addStaticAttribute(self: *TemplateBuilder, name: []const u8, value: []const u8) !void {
-        const name_ref = try self.addString(name);
-        const value_ref = try self.addString(value);
-        const payload_index: u24 = @intCast(self.static_attrs.items.len);
-        try self.static_attrs.append(.{ name_ref, value_ref });
-        try self.instructions.append(InstructionId.init(.static_attribute, payload_index));
-    }
-
-    pub fn addDynText(self: *TemplateBuilder, field_name: []const u8) !void {
-        const str_ref = try self.addString(field_name);
-        const payload_index: u24 = @intCast(self.dyn_texts.items.len);
-        try self.dyn_texts.append(str_ref);
-        try self.instructions.append(InstructionId.init(.dyn_text, payload_index));
-    }
-
-    pub fn addStaticDynAttr(self: *TemplateBuilder, name: []const u8, field_name: []const u8) !void {
-        const name_ref = try self.addString(name);
-        const field_ref = try self.addString(field_name);
-        const payload_index: u24 = @intCast(self.static_dyn_attrs.items.len);
-        try self.static_dyn_attrs.append(.{ name_ref, field_ref });
-        try self.instructions.append(InstructionId.init(.static_dyn_attr, payload_index));
-    }
-
-    pub fn addDynStaticAttr(self: *TemplateBuilder, field_name: []const u8, value: []const u8) !void {
-        const field_ref = try self.addString(field_name);
-        const value_ref = try self.addString(value);
-        const payload_index: u24 = @intCast(self.dyn_static_attrs.items.len);
-        try self.dyn_static_attrs.append(.{ field_ref, value_ref });
-        try self.instructions.append(InstructionId.init(.dyn_static_attr, payload_index));
-    }
-
-    pub fn addDynDynAttr(self: *TemplateBuilder, name_field: []const u8, value_field: []const u8) !void {
-        const name_ref = try self.addString(name_field);
-        const value_ref = try self.addString(value_field);
-        const payload_index: u24 = @intCast(self.dyn_dyn_attrs.items.len);
-        try self.dyn_dyn_attrs.append(.{ name_ref, value_ref });
-        try self.instructions.append(InstructionId.init(.dyn_dyn_attr, payload_index));
-    }
-
-    pub fn addDynEvent(self: *TemplateBuilder, event_name: []const u8, handler_field: []const u8) !void {
-        const event_ref = try self.addString(event_name);
-        const handler_ref = try self.addString(handler_field);
-        const payload_index: u24 = @intCast(self.dyn_events.items.len);
-        try self.dyn_events.append(.{ event_ref, handler_ref });
-        try self.instructions.append(InstructionId.init(.dyn_event, payload_index));
-    }
-
-    pub fn build(self: *TemplateBuilder) !EncodedTemplate {
-        return EncodedTemplate{
-            .instructions = try self.instructions.toOwnedSlice(),
-            .strings = try self.strings.toOwnedSlice(),
-            .tag_opens = try self.tag_opens.toOwnedSlice(),
-            .texts = try self.texts.toOwnedSlice(),
-            .static_attrs = try self.static_attrs.toOwnedSlice(),
-            .dyn_texts = try self.dyn_texts.toOwnedSlice(),
-            .static_dyn_attrs = try self.static_dyn_attrs.toOwnedSlice(),
-            .dyn_static_attrs = try self.dyn_static_attrs.toOwnedSlice(),
-            .dyn_dyn_attrs = try self.dyn_dyn_attrs.toOwnedSlice(),
-            .dyn_events = try self.dyn_events.toOwnedSlice(),
-        };
-    }
+const ArrayLengths = struct {
+    instructions_len: u32,
+    strings_len: u32,
+    tag_opens_len: u32,
+    texts_len: u32,
+    static_attrs_len: u32,
+    dyn_texts_len: u32,
+    static_dyn_attrs_len: u32,
+    dyn_static_attrs_len: u32,
+    dyn_dyn_attrs_len: u32,
+    dyn_events_len: u32,
 };
+
+/// Calculate the total memory needed for all arrays with proper alignment
+fn calculateTotalSize(lengths: ArrayLengths) struct { total: usize, offsets: [10]usize } {
+    var total: usize = 0;
+    var offsets: [10]usize = undefined;
+
+    // Instructions
+    offsets[0] = total;
+    total += lengths.instructions_len * @sizeOf(InstructionId);
+    total = std.mem.alignForward(usize, total, @alignOf(u8));
+
+    // Strings (u8 array)
+    offsets[1] = total;
+    total += lengths.strings_len;
+    total = std.mem.alignForward(usize, total, @alignOf(StringRef));
+
+    // Tag opens (StringRef array)
+    offsets[2] = total;
+    total += lengths.tag_opens_len * @sizeOf(StringRef);
+    total = std.mem.alignForward(usize, total, @alignOf(StringRef));
+
+    // Texts (StringRef array)
+    offsets[3] = total;
+    total += lengths.texts_len * @sizeOf(StringRef);
+    total = std.mem.alignForward(usize, total, @alignOf([2]StringRef));
+
+    // Static attrs ([2]StringRef array)
+    offsets[4] = total;
+    total += lengths.static_attrs_len * @sizeOf([2]StringRef);
+    total = std.mem.alignForward(usize, total, @alignOf(StringRef));
+
+    // Dyn texts (StringRef array)
+    offsets[5] = total;
+    total += lengths.dyn_texts_len * @sizeOf(StringRef);
+    total = std.mem.alignForward(usize, total, @alignOf([2]StringRef));
+
+    // Static dyn attrs ([2]StringRef array)
+    offsets[6] = total;
+    total += lengths.static_dyn_attrs_len * @sizeOf([2]StringRef);
+    total = std.mem.alignForward(usize, total, @alignOf([2]StringRef));
+
+    // Dyn static attrs ([2]StringRef array)
+    offsets[7] = total;
+    total += lengths.dyn_static_attrs_len * @sizeOf([2]StringRef);
+    total = std.mem.alignForward(usize, total, @alignOf([2]StringRef));
+
+    // Dyn dyn attrs ([2]StringRef array)
+    offsets[8] = total;
+    total += lengths.dyn_dyn_attrs_len * @sizeOf([2]StringRef);
+    total = std.mem.alignForward(usize, total, @alignOf([2]StringRef));
+
+    // Dyn events ([2]StringRef array)
+    offsets[9] = total;
+    total += lengths.dyn_events_len * @sizeOf([2]StringRef);
+
+    return .{ .total = total, .offsets = offsets };
+}
+
+fn readArrayLengths(reader: anytype) !ArrayLengths {
+    return ArrayLengths{
+        .instructions_len = try reader.readInt(u32, .little),
+        .strings_len = try reader.readInt(u32, .little),
+        .tag_opens_len = try reader.readInt(u32, .little),
+        .texts_len = try reader.readInt(u32, .little),
+        .static_attrs_len = try reader.readInt(u32, .little),
+        .dyn_texts_len = try reader.readInt(u32, .little),
+        .static_dyn_attrs_len = try reader.readInt(u32, .little),
+        .dyn_static_attrs_len = try reader.readInt(u32, .little),
+        .dyn_dyn_attrs_len = try reader.readInt(u32, .little),
+        .dyn_events_len = try reader.readInt(u32, .little),
+    };
+}
+
+/// deserialization from single memory allocation
+pub fn deserializeEncodedTemplate(allocator: Allocator, data: []const u8) !EncodedTemplate {
+    var stream = std.io.fixedBufferStream(data);
+    var reader = stream.reader();
+
+    const lengths = try readArrayLengths(reader);
+    const size_info = calculateTotalSize(lengths);
+
+    const bytes = try allocator.alloc(u8, size_info.total);
+
+    const instruction_bytes = bytes[size_info.offsets[0] .. size_info.offsets[0] + lengths.instructions_len * @sizeOf(InstructionId)];
+    const instructions = std.mem.bytesAsSlice(InstructionId, instruction_bytes);
+
+    const strings = bytes[size_info.offsets[1] .. size_info.offsets[1] + lengths.strings_len];
+
+    const tag_opens_bytes = bytes[size_info.offsets[2] .. size_info.offsets[2] + lengths.tag_opens_len * @sizeOf(StringRef)];
+    const tag_opens = std.mem.bytesAsSlice(StringRef, tag_opens_bytes);
+
+    const texts_bytes = bytes[size_info.offsets[3] .. size_info.offsets[3] + lengths.texts_len * @sizeOf(StringRef)];
+    const texts = std.mem.bytesAsSlice(StringRef, texts_bytes);
+
+    const static_attrs_bytes = bytes[size_info.offsets[4] .. size_info.offsets[4] + lengths.static_attrs_len * @sizeOf([2]StringRef)];
+    const static_attrs = std.mem.bytesAsSlice([2]StringRef, static_attrs_bytes);
+
+    const dyn_texts_bytes = bytes[size_info.offsets[5] .. size_info.offsets[5] + lengths.dyn_texts_len * @sizeOf(StringRef)];
+    const dyn_texts = std.mem.bytesAsSlice(StringRef, dyn_texts_bytes);
+
+    const static_dyn_attrs_bytes = bytes[size_info.offsets[6] .. size_info.offsets[6] + lengths.static_dyn_attrs_len * @sizeOf([2]StringRef)];
+    const static_dyn_attrs = std.mem.bytesAsSlice([2]StringRef, static_dyn_attrs_bytes);
+
+    const dyn_static_attrs_bytes = bytes[size_info.offsets[7] .. size_info.offsets[7] + lengths.dyn_static_attrs_len * @sizeOf([2]StringRef)];
+    const dyn_static_attrs = std.mem.bytesAsSlice([2]StringRef, dyn_static_attrs_bytes);
+
+    const dyn_dyn_attrs_bytes = bytes[size_info.offsets[8] .. size_info.offsets[8] + lengths.dyn_dyn_attrs_len * @sizeOf([2]StringRef)];
+    const dyn_dyn_attrs = std.mem.bytesAsSlice([2]StringRef, dyn_dyn_attrs_bytes);
+
+    const dyn_events_bytes = bytes[size_info.offsets[9] .. size_info.offsets[9] + lengths.dyn_events_len * @sizeOf([2]StringRef)];
+    const dyn_events = std.mem.bytesAsSlice([2]StringRef, dyn_events_bytes);
+
+    // Read data directly into sub-slices
+    for (instructions) |*instruction| instruction.* = try reader.readStruct(InstructionId);
+    _ = try reader.readAll(strings);
+
+    for (tag_opens) |*tag_open_ref| tag_open_ref.* = try reader.readStruct(StringRef);
+    for (texts) |*text_ref| text_ref.* = try reader.readStruct(StringRef);
+
+    for (static_attrs) |*pair| {
+        pair[0] = try reader.readStruct(StringRef);
+        pair[1] = try reader.readStruct(StringRef);
+    }
+
+    for (dyn_texts) |*text_ref| text_ref.* = try reader.readStruct(StringRef);
+
+    for (static_dyn_attrs) |*pair| {
+        pair[0] = try reader.readStruct(StringRef);
+        pair[1] = try reader.readStruct(StringRef);
+    }
+
+    for (dyn_static_attrs) |*pair| {
+        pair[0] = try reader.readStruct(StringRef);
+        pair[1] = try reader.readStruct(StringRef);
+    }
+
+    for (dyn_dyn_attrs) |*pair| {
+        pair[0] = try reader.readStruct(StringRef);
+        pair[1] = try reader.readStruct(StringRef);
+    }
+
+    for (dyn_events) |*pair| {
+        pair[0] = try reader.readStruct(StringRef);
+        pair[1] = try reader.readStruct(StringRef);
+    }
+
+    return .{
+        .instructions = @alignCast(instructions),
+        .strings = strings,
+        .tag_opens = @alignCast(tag_opens),
+        .texts = @alignCast(texts),
+        .static_attrs = @alignCast(static_attrs),
+        .dyn_texts = @alignCast(dyn_texts),
+        .static_dyn_attrs = @alignCast(static_dyn_attrs),
+        .dyn_static_attrs = @alignCast(dyn_static_attrs),
+        .dyn_dyn_attrs = @alignCast(dyn_dyn_attrs),
+        .dyn_events = @alignCast(dyn_events),
+        .bytes = bytes,
+    };
+}
+
+pub fn freeEncodedTemplate(allocator: Allocator, template: EncodedTemplate) void {
+    if (template.bytes) |bytes| allocator.free(bytes);
+}

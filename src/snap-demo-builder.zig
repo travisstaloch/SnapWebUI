@@ -42,12 +42,12 @@ const App = struct {
     input_text: [256]u8 = std.mem.zeroes([256]u8),
     input_len: usize = 0,
     arena: std.heap.ArenaAllocator,
-    app_template: snap.HtmlTemplate,
-    todo_item_template: snap.HtmlTemplate,
+    app_template: snap.EncodedTemplate,
+    todo_item_template: snap.EncodedTemplate,
 
     pub fn render(self: *App) !void {
         _ = self.arena.reset(.retain_capacity);
-        try self.createView();
+        self.createView();
     }
 
     pub fn updateView(self: *App, new_count: i32) !void {
@@ -55,33 +55,64 @@ const App = struct {
         try self.render();
     }
 
-    fn createView(self: *App) !void {
-        try snap.renderEncodedTemplate(
-            self.root_element,
-            self.app_template,
-            .{
-                .onDecClick = snap.eh(&onDecClick, self),
-                .onIncClick = snap.eh(&onIncClick, self),
-                .onNewTodoInput = snap.eh(&onNewTodoInput, self),
-                .onAddTodoClick = snap.eh(&onAddTodoClick, self),
-                .count = self.count.inner,
-                .input = self.input_text[0..self.input_len],
-                .todos = snap.renderableAction(&renderTodos, self, .{}),
-            },
-        );
+    /// render app with Builder api.  working but verbose.  left as demo.
+    fn createView(self: *App) void {
+        var b = snap.Builder{};
+        _ = b.elem("div", &.{.a("class", "app")}, &.{});
+        _ = b.elem("h1", &.{}, &.{}).text("Counter")
+            .end();
+        _ = b.elem("div", &.{}, &.{})
+            // TODO named event handlers
+            .elem("button", &.{.a("class", "m05")}, &.{.en("click", &onDecClick, self)})
+            .text("-")
+            .end()
+            .elem("button", &.{.a("class", "m05")}, &.{.en("click", &onIncClick, self)})
+            .text("+")
+            .end();
+        _ = b.elem("span", &.{}, &.{})
+            .textf("count: {}", .{self.count})
+            .end()
+            .end()
+            .end();
+
+        _ = b.elem("h1", &.{}, &.{})
+            .text("Todos")
+            .end();
+        _ = b.elem("div", &.{.a("class", "add-todo-section")}, &.{})
+            .elem("input", &.{
+                .a("type", "text"),
+                .a("placeholder", "Add a new todo..."),
+                .a("id", "new-todo"),
+                .a("value", self.input_text[0..self.input_len]),
+            }, &.{.en("input", &onNewTodoInput, self)})
+            .end()
+            .elem("button", &.{}, &.{.en("click", &onAddTodoClick, self)})
+            .text("Add Todo")
+            .end()
+            .end();
+        _ = b.elem("ul", &.{.a("class", "todo-list")}, &.{})
+            .elem("ul", &.{.a("class", "todo-list")}, &.{})
+            .childrenWith(self, renderTodoList)
+            .end()
+            .end()
+            .end();
     }
 
-    pub fn renderTodos(ctx: *anyopaque) !void {
-        const data: *App = @ptrCast(@alignCast(ctx));
-        for (data.todos.items) |todo| {
-            try snap.renderEncodedTemplateInner(data.todo_item_template, .{
-                .onTodoChange = snap.ehd(&onTodoChange, data, todo.id),
-                .onTodoDeleteClick = snap.ehd(&onTodoDeleteClick, data, todo.id),
-                .class = if (todo.completed) "todo-item completed" else "todo-item",
-                .id = todo.id,
-                .checked = if (todo.completed) "checked" else "data-unchecked",
-                .text = todo.text,
-            });
+    fn renderTodoList(self: *App, b: *snap.Builder) void {
+        for (self.todos.items) |todo| {
+            const todo_class = if (todo.completed) "todo-item completed" else "todo-item";
+            _ = b.elem("li", &.{.a("class", todo_class)}, &.{})
+                .elem("input", &.{
+                    .a("type", "checkbox"),
+                    .a(if (todo.completed) "checked" else "data-unchecked", ""),
+                }, &.{.ed("change", &onTodoChange, self, todo.id)})
+                .end()
+                .elem("span", &.{}, &.{}).text(todo.text)
+                .end()
+                .elem("button", &.{}, &.{.ed("click", &onTodoDeleteClick, self, todo.id)})
+                .text("Delete")
+                .end()
+                .end();
         }
     }
 

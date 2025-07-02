@@ -1,9 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
-const lib = @import("snap");
-const Node = lib.Node;
-const h = lib.h;
-const t = lib.t;
+const snap = @import("snap");
+const Node = snap.Node;
+const h = snap.h;
+const t = snap.t;
 
 test "html formatting" {
     const node = h("div", &.{.a("class", "container")}, &.{}, &.{
