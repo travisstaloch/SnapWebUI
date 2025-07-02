@@ -257,19 +257,14 @@ async function init() {
                   console.error('No encoded template available');
                   return 0;
               }
-              
               const serialized = window._lastEncodedTemplate;
-              
               if (bufferLen < serialized.length) {
                   console.error('Buffer too small for encoded template');
                   return 0;
               }
               
-              // Copy to WASM memory
               const wasmBuffer = new Uint8Array(memory.buffer, bufferPtr, bufferLen);
               wasmBuffer.set(serialized);
-              
-              // Clean up
               delete window._lastEncodedTemplate;
               
               return serialized.length;
@@ -277,8 +272,19 @@ async function init() {
               console.error('Error encoding template:', error);
               return 0;
             }
+          },
+          setTextContent: function(nodeId, textPtr, textLen) {
+            const element = elementCache[nodeId];
+            const text = stringFromMemory(textPtr, textLen);
+            if (element) element.textContent = text;
+          },
+          requestAnimationFrame: function(callbackPtr, ctxPtr) {
+            requestAnimationFrame(() => {
+              instance.exports.callZigCallback(callbackPtr, ctxPtr, 0);
+            });
           }
         },
+
       }),
     )
     .then((results) => {

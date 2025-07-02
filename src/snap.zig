@@ -221,11 +221,17 @@ pub fn State(T: type, Subscriber: type) type {
 
         pub fn set(self: *@This(), new_state: T) !void {
             self.inner = new_state;
-            try self.invalidate();
+            try self.subscriber.onStateChange();
         }
 
-        pub fn invalidate(self: *@This()) !void {
-            try self.subscriber.updateView(self.inner);
+        ///  allows for in-place modification of complex types
+        pub fn getForUpdate(self: *@This()) *T {
+            return &self.inner;
+        }
+
+        /// signals that the modification is complete
+        pub fn didUpdate(self: *@This()) !void {
+            try self.subscriber.onStateChange();
         }
     };
 }
@@ -245,6 +251,7 @@ pub const js = struct {
     pub extern fn getElementInnerHTML(selector_ptr: [*]const u8, selector_len: usize, buf_ptr: [*]u8, buf_len: usize) usize;
     pub extern fn captureBacktrace() void;
     pub extern fn printCapturedBacktrace() void;
+    pub extern fn setTextContent(node_id: NodeId, text_ptr: [*]const u8, text_len: usize) void;
     // Immediate-mode rendering functions
     pub extern fn beginRender(parent_id: NodeId) void;
     pub extern fn createElementImmediate(tag_ptr: [*]const u8, tag_len: usize) void;
@@ -257,6 +264,8 @@ pub const js = struct {
     // Template encoding functions
     pub extern fn encodeTemplate(selector_ptr: [*]const u8, selector_len: usize, buffer_ptr: [*]u8, buffer_len: usize) usize;
     pub extern fn getEncodedTemplateSize(selector_ptr: [*]const u8, selector_len: usize) usize;
+    // Animation functions
+    pub extern fn requestAnimationFrame(callback_ptr: usize, ctx_ptr: usize) u32;
 };
 
 const is_wasm = @import("builtin").cpu.arch == .wasm32;
@@ -410,6 +419,18 @@ pub fn unwrapErr(error_union: anytype) void {
     }
 }
 
+/// Set text content of a DOM element
+pub fn setTextContent(node_id: NodeId, text: []const u8) void {
+    if (!is_wasm) return;
+    js.setTextContent(node_id, text.ptr, text.len);
+}
+
+/// Start animation loop using requestAnimationFrame
+pub fn startAnimationLoop(event_handler: EventHandler) void {
+    if (!is_wasm) return;
+    _ = js.requestAnimationFrame(@intFromPtr(event_handler.callback), @intFromPtr(event_handler.ctx));
+}
+
 /// execute callback in zig, passing context pointer
 export fn callZigCallback(callback_ptr: usize, ctx_ptr: usize, data: usize) void {
     const callback: *const EventHandler.Callback = @ptrFromInt(callback_ptr);
@@ -474,9 +495,6 @@ pub fn renderEncodedTemplateInner(template: template_encoder.EncodedTemplate, ar
                 js.createElementImmediate(tag.ptr, tag.len);
             },
             .static_tag_close => {
-                js.appendChildImmediate();
-            },
-            .self_closing_tag => {
                 js.appendChildImmediate();
             },
             .static_text => {

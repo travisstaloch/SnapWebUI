@@ -19,12 +19,6 @@ function getEventName(attrName) {
     return attrName.startsWith('on') ? attrName.slice(2) : attrName;
 }
 
-// Self-closing HTML tags
-const SELF_CLOSING_TAGS = new Set([
-    'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 
-    'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'
-]);
-
 class TemplateEncoder {
     constructor() {
         this.reset();
@@ -75,10 +69,6 @@ class TemplateEncoder {
     
     addStaticTagClose() {
         this.addInstruction(1, 0); // static_tag_close = 1
-    }
-    
-    addSelfClosingTag() {
-        this.addInstruction(2, 0); // self_closing_tag = 2
     }
     
     addStaticText(text) {
@@ -177,12 +167,9 @@ class TemplateEncoder {
             this.encodeNode(child);
         }
         
-        // Close tag (unless self-closing)
-        if (SELF_CLOSING_TAGS.has(tagName)) {
-            this.addSelfClosingTag();
-        } else {
-            this.addStaticTagClose();
-        }
+        // The Zig renderer handles both closing tags and self-closing tags
+        // with the same appendChildImmediate call.
+        this.addStaticTagClose();
     }
     
     encodeTextNode(textNode) {
@@ -237,88 +224,112 @@ class TemplateEncoder {
     }
     
     serialize() {
-        // Calculate total size needed
-        let totalSize = 0;
+        const SIZEOF_UINT32 = 4;
+        const SIZEOF_STRING_REF = 8;
+        const ALIGN_OF_STRING_REF = 4;
+
+        const align = (offset, alignment) => {
+            return (offset + alignment - 1) & ~(alignment - 1);
+        };
+
+        // --- 1. Calculate layout and total size ---
+        const layout = {};
+        let currentOffset = 0;
+
+        // Header
+        layout.header = { offset: currentOffset, size: 10 * SIZEOF_UINT32 };
+        currentOffset += layout.header.size;
+
+        // Instructions
+        layout.instructions = { offset: currentOffset, size: this.instructions.length * SIZEOF_UINT32 };
+        currentOffset += layout.instructions.size;
         
-        // Array lengths (10 * 4 bytes)
-        totalSize += 10 * 4;
-        
-        // Instructions array
-        totalSize += this.instructions.length * 4;
-        
-        // Strings array
-        totalSize += this.strings.length;
-        
-        // StringRef arrays (each StringRef is 8 bytes: offset + len)
-        totalSize += this.tagOpens.length * 8;
-        totalSize += this.texts.length * 8;
-        totalSize += this.staticAttrs.length * 16; // 2 StringRefs
-        totalSize += this.dynTexts.length * 8;
-        totalSize += this.staticDynAttrs.length * 16;
-        totalSize += this.dynStaticAttrs.length * 16;
-        totalSize += this.dynDynAttrs.length * 16;
-        totalSize += this.dynEvents.length * 16;
-        
-        // Create buffer
+        // Strings
+        currentOffset = align(currentOffset, 1); // No-op, for clarity
+        layout.strings = { offset: currentOffset, size: this.strings.length };
+        currentOffset += layout.strings.size;
+
+        // Helper for StringRef arrays
+        const layoutStringRefArray = (name, arr, isPair) => {
+            currentOffset = align(currentOffset, ALIGN_OF_STRING_REF);
+            const size = arr.length * (isPair ? SIZEOF_STRING_REF * 2 : SIZEOF_STRING_REF);
+            layout[name] = { offset: currentOffset, size: size };
+            currentOffset += size;
+        };
+
+        layoutStringRefArray('tagOpens', this.tagOpens, false);
+        layoutStringRefArray('texts', this.texts, false);
+        layoutStringRefArray('staticAttrs', this.staticAttrs, true);
+        layoutStringRefArray('dynTexts', this.dynTexts, false);
+        layoutStringRefArray('staticDynAttrs', this.staticDynAttrs, true);
+        layoutStringRefArray('dynStaticAttrs', this.dynStaticAttrs, true);
+        layoutStringRefArray('dynDynAttrs', this.dynDynAttrs, true);
+        layoutStringRefArray('dynEvents', this.dynEvents, true);
+
+        const totalSize = currentOffset;
+
+        // --- 2. Create buffer and write data ---
         const buffer = new ArrayBuffer(totalSize);
         const view = new DataView(buffer);
-        let offset = 0;
         
-        // Write array lengths
-        view.setUint32(offset, this.instructions.length, true); offset += 4;
-        view.setUint32(offset, this.strings.length, true); offset += 4;
-        view.setUint32(offset, this.tagOpens.length, true); offset += 4;
-        view.setUint32(offset, this.texts.length, true); offset += 4;
-        view.setUint32(offset, this.staticAttrs.length, true); offset += 4;
-        view.setUint32(offset, this.dynTexts.length, true); offset += 4;
-        view.setUint32(offset, this.staticDynAttrs.length, true); offset += 4;
-        view.setUint32(offset, this.dynStaticAttrs.length, true); offset += 4;
-        view.setUint32(offset, this.dynDynAttrs.length, true); offset += 4;
-        view.setUint32(offset, this.dynEvents.length, true); offset += 4;
-        
+        // Write header (array lengths)
+        let headerOffset = layout.header.offset;
+        view.setUint32(headerOffset, this.instructions.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.strings.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.tagOpens.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.texts.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.staticAttrs.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.dynTexts.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.staticDynAttrs.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.dynStaticAttrs.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.dynDynAttrs.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.dynEvents.length, true); headerOffset += 4;
+
         // Write instructions
+        let instOffset = layout.instructions.offset;
         for (const instruction of this.instructions) {
-            view.setUint32(offset, instruction, true);
-            offset += 4;
+            view.setUint32(instOffset, instruction, true);
+            instOffset += 4;
         }
-        
+
         // Write strings
+        let stringsOffset = layout.strings.offset;
         for (const byte of this.strings) {
-            view.setUint8(offset, byte);
-            offset += 1;
+            view.setUint8(stringsOffset, byte);
+            stringsOffset += 1;
         }
-        
+
         // Helper to write StringRef
-        const writeStringRef = (ref) => {
-            view.setUint32(offset, ref.offset, true); offset += 4;
-            view.setUint32(offset, ref.len, true); offset += 4;
+        const writeStringRef = (ref, offset) => {
+            view.setUint32(offset, ref.offset, true);
+            view.setUint32(offset + 4, ref.len, true);
+            return offset + SIZEOF_STRING_REF;
         };
-        
-        // Write StringRef arrays
-        for (const ref of this.tagOpens) writeStringRef(ref);
-        for (const ref of this.texts) writeStringRef(ref);
-        for (const [name, value] of this.staticAttrs) {
-            writeStringRef(name);
-            writeStringRef(value);
-        }
-        for (const ref of this.dynTexts) writeStringRef(ref);
-        for (const [name, field] of this.staticDynAttrs) {
-            writeStringRef(name);
-            writeStringRef(field);
-        }
-        for (const [field, value] of this.dynStaticAttrs) {
-            writeStringRef(field);
-            writeStringRef(value);
-        }
-        for (const [nameField, valueField] of this.dynDynAttrs) {
-            writeStringRef(nameField);
-            writeStringRef(valueField);
-        }
-        for (const [event, handler] of this.dynEvents) {
-            writeStringRef(event);
-            writeStringRef(handler);
-        }
-        
+
+        // Helper to write StringRef arrays
+        const writeArray = (name, arr, isPair) => {
+            let offset = layout[name].offset;
+            if (isPair) {
+                for (const [item1, item2] of arr) {
+                    offset = writeStringRef(item1, offset);
+                    offset = writeStringRef(item2, offset);
+                }
+            } else {
+                for (const item of arr) {
+                    offset = writeStringRef(item, offset);
+                }
+            }
+        };
+
+        writeArray('tagOpens', this.tagOpens, false);
+        writeArray('texts', this.texts, false);
+        writeArray('staticAttrs', this.staticAttrs, true);
+        writeArray('dynTexts', this.dynTexts, false);
+        writeArray('staticDynAttrs', this.staticDynAttrs, true);
+        writeArray('dynStaticAttrs', this.dynStaticAttrs, true);
+        writeArray('dynDynAttrs', this.dynDynAttrs, true);
+        writeArray('dynEvents', this.dynEvents, true);
+
         return new Uint8Array(buffer);
     }
-}
+}""

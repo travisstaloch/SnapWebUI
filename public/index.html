@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 
-<body>
+<body style="height: 100rem">
     <template id="app-template">
       <h1>Snap Demo</h1>
       <div class="app">
@@ -20,10 +20,19 @@
         </div>
         <h3>Todos</h3>
         <div class="add-todo-section">
-          <input type=text placeholder="Description..." id="new-todo" value="{input}" oninput="{eh__onNewTodoInput}">
+          <input type=text placeholder="Description..." id="new-todo" value="{input}" oninput="{eh__onNewTodoInput}" />
           <button onclick="{eh__onAddTodoClick}">Add Todo</button>
         </div>
         <ul class="todo-list">{todos}</ul>
+
+        <h3>Stress Test</h3>
+        <span style="margin: 1rem 0;">
+          <button onclick="{eh__onToggleAnimation}">{animation_label}</button>
+        </span>
+        <span style="margin-left: 1rem">frames: <span id="frame-counter">{frame_count}</span></span>
+        <br>
+        <button onclick="{eh__onToggleStressTest}">{stress_test_label}</button>
+        <div class="stress-test-container">{stress_table}</div>
       </div>
     </template>
     <template id="todo-item-template">
@@ -32,6 +41,15 @@
         <label for=todo{id}>{text}</label>
         <button onclick="{eh__onTodoDeleteClick}">Delete</button>
       </li>
+    </template>
+    <template id="stress-table-template">
+        <table class="stress-table" style="border-collapse: collapse; margin: 1rem 0;">
+            {stress_rows}
+        </table>
+    </template>
+    <template id="stress-row-template"><tr>{stress_cells}</tr></template>
+    <template id="stress-cell-template">
+        <td style="border: 1px solid #ccc; padding: 4px 8px; text-align: center; font-family: monospace; font-size: 12px;">{value}</td>
     </template>
 
     <div id="app"></div>

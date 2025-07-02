@@ -6,7 +6,6 @@ const Allocator = mem.Allocator;
 pub const InstructionTag = enum(u8) {
     static_tag_open = 0,
     static_tag_close = 1,
-    self_closing_tag = 2,
     static_text = 3,
     static_attribute = 4,
     dyn_text = 5,
@@ -69,7 +68,7 @@ pub const EncodedTemplate = struct {
 };
 
 /// Reference to a string in the strings buffer
-pub const StringRef = packed struct {
+pub const StringRef = extern struct {
     offset: u32,
     len: u32,
 
@@ -169,88 +168,25 @@ pub fn deserializeEncodedTemplate(allocator: Allocator, data: []const u8) !Encod
     var reader = stream.reader();
 
     const lengths = try readArrayLengths(reader);
+
+    // The data is now correctly aligned, so we can allocate a single
+    // block and slice it up directly.
+    const bytes = try allocator.alloc(u8, data.len - @sizeOf(ArrayLengths));
+    _ = try reader.readAll(bytes);
+
     const size_info = calculateTotalSize(lengths);
 
-    const bytes = try allocator.alloc(u8, size_info.total);
-
-    const instruction_bytes = bytes[size_info.offsets[0] .. size_info.offsets[0] + lengths.instructions_len * @sizeOf(InstructionId)];
-    const instructions = std.mem.bytesAsSlice(InstructionId, instruction_bytes);
-
-    const strings = bytes[size_info.offsets[1] .. size_info.offsets[1] + lengths.strings_len];
-
-    const tag_opens_bytes = bytes[size_info.offsets[2] .. size_info.offsets[2] + lengths.tag_opens_len * @sizeOf(StringRef)];
-    const tag_opens = std.mem.bytesAsSlice(StringRef, tag_opens_bytes);
-
-    const texts_bytes = bytes[size_info.offsets[3] .. size_info.offsets[3] + lengths.texts_len * @sizeOf(StringRef)];
-    const texts = std.mem.bytesAsSlice(StringRef, texts_bytes);
-
-    const static_attrs_bytes = bytes[size_info.offsets[4] .. size_info.offsets[4] + lengths.static_attrs_len * @sizeOf([2]StringRef)];
-    const static_attrs = std.mem.bytesAsSlice([2]StringRef, static_attrs_bytes);
-
-    const dyn_texts_bytes = bytes[size_info.offsets[5] .. size_info.offsets[5] + lengths.dyn_texts_len * @sizeOf(StringRef)];
-    const dyn_texts = std.mem.bytesAsSlice(StringRef, dyn_texts_bytes);
-
-    const static_dyn_attrs_bytes = bytes[size_info.offsets[6] .. size_info.offsets[6] + lengths.static_dyn_attrs_len * @sizeOf([2]StringRef)];
-    const static_dyn_attrs = std.mem.bytesAsSlice([2]StringRef, static_dyn_attrs_bytes);
-
-    const dyn_static_attrs_bytes = bytes[size_info.offsets[7] .. size_info.offsets[7] + lengths.dyn_static_attrs_len * @sizeOf([2]StringRef)];
-    const dyn_static_attrs = std.mem.bytesAsSlice([2]StringRef, dyn_static_attrs_bytes);
-
-    const dyn_dyn_attrs_bytes = bytes[size_info.offsets[8] .. size_info.offsets[8] + lengths.dyn_dyn_attrs_len * @sizeOf([2]StringRef)];
-    const dyn_dyn_attrs = std.mem.bytesAsSlice([2]StringRef, dyn_dyn_attrs_bytes);
-
-    const dyn_events_bytes = bytes[size_info.offsets[9] .. size_info.offsets[9] + lengths.dyn_events_len * @sizeOf([2]StringRef)];
-    const dyn_events = std.mem.bytesAsSlice([2]StringRef, dyn_events_bytes);
-
-    // Read data directly into sub-slices
-    for (instructions) |*instruction| instruction.* = try reader.readStruct(InstructionId);
-    _ = try reader.readAll(strings);
-
-    for (tag_opens) |*tag_open_ref| tag_open_ref.* = try reader.readStruct(StringRef);
-    for (texts) |*text_ref| text_ref.* = try reader.readStruct(StringRef);
-
-    for (static_attrs) |*pair| {
-        pair[0] = try reader.readStruct(StringRef);
-        pair[1] = try reader.readStruct(StringRef);
-    }
-
-    for (dyn_texts) |*text_ref| text_ref.* = try reader.readStruct(StringRef);
-
-    for (static_dyn_attrs) |*pair| {
-        pair[0] = try reader.readStruct(StringRef);
-        pair[1] = try reader.readStruct(StringRef);
-    }
-
-    for (dyn_static_attrs) |*pair| {
-        pair[0] = try reader.readStruct(StringRef);
-        pair[1] = try reader.readStruct(StringRef);
-    }
-
-    for (dyn_dyn_attrs) |*pair| {
-        pair[0] = try reader.readStruct(StringRef);
-        pair[1] = try reader.readStruct(StringRef);
-    }
-
-    for (dyn_events) |*pair| {
-        pair[0] = try reader.readStruct(StringRef);
-        pair[1] = try reader.readStruct(StringRef);
-    }
-
     return .{
-        .instructions = @alignCast(instructions),
-        .strings = strings,
-        .tag_opens = @alignCast(tag_opens),
-        .texts = @alignCast(texts),
-        .static_attrs = @alignCast(static_attrs),
-        .dyn_texts = @alignCast(dyn_texts),
-        .static_dyn_attrs = @alignCast(static_dyn_attrs),
-        .dyn_static_attrs = @alignCast(dyn_static_attrs),
-        .dyn_dyn_attrs = @alignCast(dyn_dyn_attrs),
-        .dyn_events = @alignCast(dyn_events),
+        .instructions = @alignCast(mem.bytesAsSlice(InstructionId, bytes[size_info.offsets[0]..size_info.offsets[1]])),
+        .strings = bytes[size_info.offsets[1]..size_info.offsets[2]],
+        .tag_opens = @alignCast(mem.bytesAsSlice(StringRef, bytes[size_info.offsets[2]..size_info.offsets[3]])),
+        .texts = @alignCast(mem.bytesAsSlice(StringRef, bytes[size_info.offsets[3]..size_info.offsets[4]])),
+        .static_attrs = @alignCast(mem.bytesAsSlice([2]StringRef, bytes[size_info.offsets[4]..size_info.offsets[5]])),
+        .dyn_texts = @alignCast(mem.bytesAsSlice(StringRef, bytes[size_info.offsets[5]..size_info.offsets[6]])),
+        .static_dyn_attrs = @alignCast(mem.bytesAsSlice([2]StringRef, bytes[size_info.offsets[6]..size_info.offsets[7]])),
+        .dyn_static_attrs = @alignCast(mem.bytesAsSlice([2]StringRef, bytes[size_info.offsets[7]..size_info.offsets[8]])),
+        .dyn_dyn_attrs = @alignCast(mem.bytesAsSlice([2]StringRef, bytes[size_info.offsets[8]..size_info.offsets[9]])),
+        .dyn_events = @alignCast(mem.bytesAsSlice([2]StringRef, bytes[size_info.offsets[9]..size_info.total])),
         .bytes = bytes,
     };
-}
-
-pub fn freeEncodedTemplate(allocator: Allocator, template: EncodedTemplate) void {
-    if (template.bytes) |bytes| allocator.free(bytes);
 }
