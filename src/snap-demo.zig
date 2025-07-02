@@ -42,8 +42,8 @@ const App = struct {
     input_text: [256]u8 = std.mem.zeroes([256]u8),
     input_len: usize = 0,
     arena: std.heap.ArenaAllocator,
-    app_template: snap.ParsedTemplate,
-    todo_item_template: snap.ParsedTemplate,
+    app_template: snap.EncodedTemplate,
+    todo_item_template: snap.EncodedTemplate,
 
     pub fn render(self: *App) !void {
         _ = self.arena.reset(.retain_capacity);
@@ -56,7 +56,8 @@ const App = struct {
     }
 
     fn createViewTemplate(self: *App) void {
-        snap.renderTemplate(self.root_element, snap.renderable(
+        snap.renderEncodedTemplate(
+            self.root_element,
             self.app_template,
             .{
                 .onDecClick = snap.eh(&onDecClick, self),
@@ -67,20 +68,20 @@ const App = struct {
                 .input = self.input_text[0..self.input_len],
                 .todos = snap.renderableAction(&renderTodos, self, .{}),
             },
-        ));
+        );
     }
 
     pub fn renderTodos(ctx: *anyopaque) !void {
         const data: *App = @ptrCast(@alignCast(ctx));
         for (data.todos.items) |todo| {
-            snap.renderTemplateInner(snap.renderable(data.todo_item_template, .{
+            snap.renderEncodedTemplateInner(data.todo_item_template, .{
                 .onTodoChange = snap.ehd(&onTodoChange, data, todo.id),
                 .onTodoDeleteClick = snap.ehd(&onTodoDeleteClick, data, todo.id),
                 .class = if (todo.completed) "todo-item completed" else "todo-item",
                 .id = todo.id,
                 .checked = if (todo.completed) "checked" else "data-unchecked",
                 .text = todo.text,
-            }));
+            });
         }
     }
 
@@ -149,17 +150,13 @@ fn initInner() !void {
     const alloc = std.heap.wasm_allocator;
     const app = try alloc.create(App);
     const root_element = snap.querySelector("#app");
-    // buffer must be big enough to read template contents one at a time
-    var template_buf: [4096]u8 = undefined;
-    const asrc = try alloc.dupeZ(u8, snap.querySelectorInnerHTML("#app-template", &template_buf));
-    const bsrc = try alloc.dupeZ(u8, snap.querySelectorInnerHTML("#todo-item-template", &template_buf));
     app.* = .{
         .root_element = root_element,
         .count = snap.useState(@as(i32, 0), app),
         .todos = .init(alloc),
         .arena = .init(alloc),
-        .app_template = try snap.parseTemplate(alloc, asrc),
-        .todo_item_template = try snap.parseTemplate(alloc, bsrc),
+        .app_template = try snap.encodeTemplateFromDOM(alloc, "#app-template"),
+        .todo_item_template = try snap.encodeTemplateFromDOM(alloc, "#todo-item-template"),
     };
     try app.render();
 }

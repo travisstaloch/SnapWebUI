@@ -20,6 +20,7 @@ let lastError = null;
 // immediate renderer state
 let nodeStack = []; // Stack for building DOM tree
 let currentParent = null;
+const templateEncoder = new TemplateEncoder();
 
 const wasm_url = document.currentScript.getAttribute("data-wasm-url");
 const wasm_init_method = document.currentScript.getAttribute("data-wasm-init-method");
@@ -220,6 +221,63 @@ async function init() {
             nodeStack = [];
             currentParent = null;
           },
+          getEncodedTemplateSize: function(selectorPtr, selectorLen) {
+            try {
+              const selector = new TextDecoder().decode(
+                  new Uint8Array(memory.buffer, selectorPtr, selectorLen)
+              );
+              
+              const element = document.querySelector(selector);
+              if (!element) {
+                  console.warn('Template not found:', selector);
+                  return 0;
+              }
+              
+              templateEncoder.reset();
+              
+              // Encode the template content
+              for (const child of element.content ? element.content.childNodes : element.childNodes) {
+                  templateEncoder.encodeNode(child);
+              }
+              
+              const serialized = templateEncoder.serialize();
+              
+              // Store for later retrieval
+              window._lastEncodedTemplate = serialized;
+              
+              return serialized.length;
+            } catch (error) {
+              console.error('Error getting encoded template size:', error);
+              return 0;
+            }
+          },
+          encodeTemplate: function(selectorPtr, selectorLen, bufferPtr, bufferLen) {
+            try {
+              if (!window._lastEncodedTemplate) {
+                  console.error('No encoded template available');
+                  return 0;
+              }
+              
+              const serialized = window._lastEncodedTemplate;
+              
+              if (bufferLen < serialized.length) {
+                  console.error('Buffer too small for encoded template');
+                  return 0;
+              }
+              
+              // Copy to WASM memory
+              const wasmBuffer = new Uint8Array(memory.buffer, bufferPtr, bufferLen);
+              wasmBuffer.set(serialized);
+              
+              // Clean up
+              delete window._lastEncodedTemplate;
+              
+              return serialized.length;
+            } catch (error) {
+              console.error('Error encoding template:', error);
+              return 0;
+            }
+          }
         },
       }),
     )

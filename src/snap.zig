@@ -1,8 +1,12 @@
 const std = @import("std");
 const mem = std.mem;
 const assert = std.debug.assert;
-pub const HtmlTokenizer = @import("HtmlTokenizer.zig");
+const template_encoder = @import("template_encoder.zig");
 
+// Make sure to export the template_encoder module
+pub const TemplateEncoder = template_encoder;
+pub const EncodedTemplate = template_encoder.EncodedTemplate;
+pub const TemplateBuilder = template_encoder.TemplateBuilder;
 /// DOM node handle type
 pub const NodeId = enum(i32) { null = std.math.minInt(i32), _ };
 
@@ -252,6 +256,9 @@ pub const js = struct {
     pub extern fn addEventImmediate(event_ptr: [*]const u8, event_len: usize, callback_ptr: usize, ctx_ptr: usize, data: usize) void;
     pub extern fn appendChildImmediate() void;
     pub extern fn endRender() void;
+    // Template encoding functions
+    pub extern fn encodeTemplate(selector_ptr: [*]const u8, selector_len: usize, buffer_ptr: [*]u8, buffer_len: usize) usize;
+    pub extern fn getEncodedTemplateSize(selector_ptr: [*]const u8, selector_len: usize) usize;
 };
 
 const is_wasm = @import("builtin").cpu.arch == .wasm32;
@@ -486,7 +493,17 @@ pub fn renderTemplate(node_id: NodeId, r: anytype) void {
     // js.endRender();
 }
 
-const Span = HtmlTokenizer.Span;
+// const Span = HtmlTokenizer.Span;
+pub const Span = struct {
+    start: u32,
+    end: u32,
+
+    pub const zero: Span = .{ .start = 0, .end = 0 };
+
+    pub fn slice(loc: Span, s: [:0]const u8) []const u8 {
+        return s[loc.start..loc.end];
+    }
+};
 
 fn resolveDynamicString(buf: []u8, spec_span: Span, r: anytype) ![]const u8 {
     var specname = spec_span.slice(r.template.src);
@@ -683,95 +700,352 @@ fn processPendingAttribute(
     }
 }
 
-pub fn parseTemplate(allocator: mem.Allocator, src: [:0]const u8) !ParsedTemplate {
-    var res = std.ArrayList(RenderInstruction).init(allocator);
-    errdefer res.deinit();
-    var tokenizer = HtmlTokenizer{};
-    var last_attr_name: ?Span = null;
-    var last_attr_value: ?Span = null;
-    var open_tag_name: ?Span = null;
+// pub fn parseTemplate(allocator: mem.Allocator, src: [:0]const u8) !ParsedTemplate {
+//     var res = std.ArrayList(RenderInstruction).init(allocator);
+//     errdefer res.deinit();
+//     var tokenizer = HtmlTokenizer{};
+//     var last_attr_name: ?Span = null;
+//     var last_attr_value: ?Span = null;
+//     var open_tag_name: ?Span = null;
 
-    while (true) {
-        const token = tokenizer.next(src);
-        // log("{s}: {s}", .{ @tagName(token.tag), token.span.slice(src) });
-        switch (token.tag) {
-            .eof, .invalid => break,
-            .tag_name => {
-                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
-                last_attr_name = null;
-                last_attr_value = null;
+//     while (true) {
+//         const token = tokenizer.next(src);
+//         // log("{s}: {s}", .{ @tagName(token.tag), token.span.slice(src) });
+//         switch (token.tag) {
+//             .eof, .invalid => break,
+//             .tag_name => {
+//                 try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+//                 last_attr_name = null;
+//                 last_attr_value = null;
 
-                if (open_tag_name) |tag_span| {
-                    if (isSelfClosingTag(tag_span.slice(src))) {
-                        try res.append(.self_closing_tag);
-                    }
-                }
+//                 if (open_tag_name) |tag_span| {
+//                     if (isSelfClosingTag(tag_span.slice(src))) {
+//                         try res.append(.self_closing_tag);
+//                     }
+//                 }
 
-                // log("tag_name '{s}'", .{token.span.slice(src)});
-                try res.append(.{ .static_tag_open = token.span });
-                open_tag_name = token.span;
+//                 // log("tag_name '{s}'", .{token.span.slice(src)});
+//                 try res.append(.{ .static_tag_open = token.span });
+//                 open_tag_name = token.span;
+//             },
+//             .tag_end_name => {
+//                 try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+//                 last_attr_name = null;
+//                 last_attr_value = null;
+
+//                 if (open_tag_name) |tag_span| {
+//                     if (isSelfClosingTag(tag_span.slice(src))) {
+//                         try res.append(.self_closing_tag);
+//                     }
+//                 }
+//                 open_tag_name = null;
+//                 try res.append(.static_tag_close);
+//             },
+//             .tag_self_close => {
+//                 try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+//                 last_attr_name = null;
+//                 last_attr_value = null;
+//                 try res.append(.self_closing_tag);
+//                 open_tag_name = null;
+//             },
+
+//             .text => {
+//                 try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+//                 last_attr_name = null;
+//                 last_attr_value = null;
+
+//                 if (open_tag_name) |tag_span| {
+//                     if (isSelfClosingTag(tag_span.slice(src))) {
+//                         try res.append(.self_closing_tag);
+//                         open_tag_name = null;
+//                     }
+//                 }
+
+//                 var sn = token.span;
+//                 while (mem.indexOfScalar(u8, sn.slice(src), '{')) |i| {
+//                     const p: Span = .{ .start = sn.start, .end = @intCast(sn.start + i) };
+//                     try res.append(.{ .static_text = p });
+//                     const end: u32 = @intCast(mem.indexOfScalarPos(u8, sn.slice(src), i, '}').?);
+//                     const spec: Span = .{ .start = sn.start + i + 1, .end = @intCast(sn.start + end) };
+//                     try res.append(.{ .dyn_text = spec });
+//                     sn.start = spec.end + 1;
+//                 }
+//                 if (sn.start != sn.end) try res.append(.{ .static_text = sn });
+//             },
+//             .attr_name => {
+//                 try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+//                 last_attr_value = null;
+//                 last_attr_name = token.span;
+//             },
+//             .attr_value => last_attr_value = token.span,
+
+//             .doctype,
+//             .comment,
+//             => {},
+//         }
+//     }
+//     try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+//     if (open_tag_name) |tag_span| {
+//         if (isSelfClosingTag(tag_span.slice(src))) {
+//             try res.append(.self_closing_tag);
+//         }
+//     }
+//     return .{ .src = src, .instructions = try res.toOwnedSlice() };
+// }
+
+pub fn encodeTemplateFromDOM(allocator: mem.Allocator, selector: []const u8) !template_encoder.EncodedTemplate {
+    if (!is_wasm) {
+        // For non-WASM environments, return empty template
+        return template_encoder.EncodedTemplate{
+            .instructions = &.{},
+            .strings = &.{},
+            .tag_opens = &.{},
+            .texts = &.{},
+            .static_attrs = &.{},
+            .dyn_texts = &.{},
+            .static_dyn_attrs = &.{},
+            .dyn_static_attrs = &.{},
+            .dyn_dyn_attrs = &.{},
+            .dyn_events = &.{},
+        };
+    }
+
+    // Get the required buffer size
+    const buffer_size = js.getEncodedTemplateSize(selector.ptr, selector.len);
+    if (buffer_size == 0) {
+        return error.TemplateNotFound;
+    }
+
+    // Allocate buffer for the encoded data
+    const buffer = try allocator.alloc(u8, buffer_size);
+    defer allocator.free(buffer);
+
+    // Get the encoded template data from JavaScript
+    const actual_size = js.encodeTemplate(selector.ptr, selector.len, buffer.ptr, buffer.len);
+    if (actual_size != buffer_size) {
+        return error.EncodingMismatch;
+    }
+
+    // Deserialize the encoded template
+    return deserializeEncodedTemplate(allocator, buffer);
+}
+
+fn deserializeEncodedTemplate(allocator: mem.Allocator, buffer: []const u8) !template_encoder.EncodedTemplate {
+    var stream = std.io.fixedBufferStream(buffer);
+    const reader = stream.reader();
+
+    // Read array lengths
+    const instructions_len = try reader.readInt(u32, .little);
+    const strings_len = try reader.readInt(u32, .little);
+    const tag_opens_len = try reader.readInt(u32, .little);
+    const texts_len = try reader.readInt(u32, .little);
+    const static_attrs_len = try reader.readInt(u32, .little);
+    const dyn_texts_len = try reader.readInt(u32, .little);
+    const static_dyn_attrs_len = try reader.readInt(u32, .little);
+    const dyn_static_attrs_len = try reader.readInt(u32, .little);
+    const dyn_dyn_attrs_len = try reader.readInt(u32, .little);
+    const dyn_events_len = try reader.readInt(u32, .little);
+
+    // Allocate arrays
+    const instructions = try allocator.alloc(template_encoder.InstructionId, instructions_len);
+    const strings = try allocator.alloc(u8, strings_len);
+    const tag_opens = try allocator.alloc(template_encoder.StringRef, tag_opens_len);
+    const texts = try allocator.alloc(template_encoder.StringRef, texts_len);
+    const static_attrs = try allocator.alloc([2]template_encoder.StringRef, static_attrs_len);
+    const dyn_texts = try allocator.alloc(template_encoder.StringRef, dyn_texts_len);
+    const static_dyn_attrs = try allocator.alloc([2]template_encoder.StringRef, static_dyn_attrs_len);
+    const dyn_static_attrs = try allocator.alloc([2]template_encoder.StringRef, dyn_static_attrs_len);
+    const dyn_dyn_attrs = try allocator.alloc([2]template_encoder.StringRef, dyn_dyn_attrs_len);
+    const dyn_events = try allocator.alloc([2]template_encoder.StringRef, dyn_events_len);
+
+    errdefer {
+        allocator.free(instructions);
+        allocator.free(strings);
+        allocator.free(tag_opens);
+        allocator.free(texts);
+        allocator.free(static_attrs);
+        allocator.free(dyn_texts);
+        allocator.free(static_dyn_attrs);
+        allocator.free(dyn_static_attrs);
+        allocator.free(dyn_dyn_attrs);
+        allocator.free(dyn_events);
+    }
+
+    // Read data
+    try reader.readNoEof(mem.sliceAsBytes(instructions));
+    try reader.readNoEof(strings);
+    try reader.readNoEof(mem.sliceAsBytes(tag_opens));
+    try reader.readNoEof(mem.sliceAsBytes(texts));
+    try reader.readNoEof(mem.sliceAsBytes(static_attrs));
+    try reader.readNoEof(mem.sliceAsBytes(dyn_texts));
+    try reader.readNoEof(mem.sliceAsBytes(static_dyn_attrs));
+    try reader.readNoEof(mem.sliceAsBytes(dyn_static_attrs));
+    try reader.readNoEof(mem.sliceAsBytes(dyn_dyn_attrs));
+    try reader.readNoEof(mem.sliceAsBytes(dyn_events));
+
+    return template_encoder.EncodedTemplate{
+        .instructions = instructions,
+        .strings = strings,
+        .tag_opens = tag_opens,
+        .texts = texts,
+        .static_attrs = static_attrs,
+        .dyn_texts = dyn_texts,
+        .static_dyn_attrs = static_dyn_attrs,
+        .dyn_static_attrs = dyn_static_attrs,
+        .dyn_dyn_attrs = dyn_dyn_attrs,
+        .dyn_events = dyn_events,
+    };
+}
+
+// Update the existing renderTemplate function to work with EncodedTemplate
+pub fn renderEncodedTemplate(node_id: NodeId, template: template_encoder.EncodedTemplate, args: anytype) void {
+    if (!is_wasm) return;
+    js.beginRender(node_id);
+    renderEncodedTemplateInner(template, args);
+    js.endRender();
+}
+
+pub fn renderEncodedTemplateInner(template: template_encoder.EncodedTemplate, args: anytype) void {
+    var buf: [256]u8 = undefined;
+    for (template.instructions) |instruction| {
+        switch (instruction.tag) {
+            .static_tag_open => {
+                const tag_ref = template.tag_opens[instruction.payload_index];
+                const tag = tag_ref.slice(template.strings);
+                js.createElementImmediate(tag.ptr, tag.len);
             },
-            .tag_end_name => {
-                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
-                last_attr_name = null;
-                last_attr_value = null;
-
-                if (open_tag_name) |tag_span| {
-                    if (isSelfClosingTag(tag_span.slice(src))) {
-                        try res.append(.self_closing_tag);
-                    }
-                }
-                open_tag_name = null;
-                try res.append(.static_tag_close);
+            .static_tag_close => {
+                js.appendChildImmediate();
             },
-            .tag_self_close => {
-                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
-                last_attr_name = null;
-                last_attr_value = null;
-                try res.append(.self_closing_tag);
-                open_tag_name = null;
+            .self_closing_tag => {
+                js.appendChildImmediate();
             },
-
-            .text => {
-                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
-                last_attr_name = null;
-                last_attr_value = null;
-
-                if (open_tag_name) |tag_span| {
-                    if (isSelfClosingTag(tag_span.slice(src))) {
-                        try res.append(.self_closing_tag);
-                        open_tag_name = null;
-                    }
-                }
-
-                var sn = token.span;
-                while (mem.indexOfScalar(u8, sn.slice(src), '{')) |i| {
-                    const p: Span = .{ .start = sn.start, .end = @intCast(sn.start + i) };
-                    try res.append(.{ .static_text = p });
-                    const end: u32 = @intCast(mem.indexOfScalarPos(u8, sn.slice(src), i, '}').?);
-                    const spec: Span = .{ .start = sn.start + i + 1, .end = @intCast(sn.start + end) };
-                    try res.append(.{ .dyn_text = spec });
-                    sn.start = spec.end + 1;
-                }
-                if (sn.start != sn.end) try res.append(.{ .static_text = sn });
+            .static_text => {
+                const text_ref = template.texts[instruction.payload_index];
+                const text = text_ref.slice(template.strings);
+                js.createTextImmediate(text.ptr, text.len);
+                js.appendChildImmediate();
             },
-            .attr_name => {
-                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
-                last_attr_value = null;
-                last_attr_name = token.span;
+            .static_attribute => {
+                const attr_refs = template.static_attrs[instruction.payload_index];
+                const name = attr_refs[0].slice(template.strings);
+                const value = attr_refs[1].slice(template.strings);
+                js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
             },
-            .attr_value => last_attr_value = token.span,
-
-            .doctype,
-            .comment,
-            => {},
+            .dyn_text => {
+                const field_ref = template.dyn_texts[instruction.payload_index];
+                const field_name = field_ref.slice(template.strings);
+                unwrapErr(renderDynamicTextNodeFromField(field_name, args));
+            },
+            .static_dyn_attr => {
+                const attr_refs = template.static_dyn_attrs[instruction.payload_index];
+                const name = attr_refs[0].slice(template.strings);
+                const field_name = attr_refs[1].slice(template.strings);
+                const value = unwrapErr(resolveDynamicStringFromField(&buf, field_name, args));
+                js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
+            },
+            .dyn_static_attr => {
+                const attr_refs = template.dyn_static_attrs[instruction.payload_index];
+                const field_name = attr_refs[0].slice(template.strings);
+                const value = attr_refs[1].slice(template.strings);
+                var buf2: [256]u8 = undefined;
+                const name = unwrapErr(resolveDynamicStringFromField(&buf2, field_name, args));
+                js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
+            },
+            .dyn_dyn_attr => {
+                const attr_refs = template.dyn_dyn_attrs[instruction.payload_index];
+                const name_field = attr_refs[0].slice(template.strings);
+                const value_field = attr_refs[1].slice(template.strings);
+                const name = unwrapErr(resolveDynamicStringFromField(&buf, name_field, args));
+                var buf2: [256]u8 = undefined;
+                const value = unwrapErr(resolveDynamicStringFromField(&buf2, value_field, args));
+                js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
+            },
+            .dyn_event => {
+                const event_refs = template.dyn_events[instruction.payload_index];
+                const event_name = event_refs[0].slice(template.strings);
+                const handler_field = event_refs[1].slice(template.strings);
+                const event = unwrapErr(resolveDynamicEventHandlerFromField(handler_field, args));
+                js.addEventImmediate(event_name.ptr, event_name.len, @intFromPtr(event.callback), @intFromPtr(event.ctx), event.data);
+            },
         }
     }
-    try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
-    if (open_tag_name) |tag_span| {
-        if (isSelfClosingTag(tag_span.slice(src))) {
-            try res.append(.self_closing_tag);
-        }
+}
+
+// Helper functions for the new template system
+fn resolveDynamicStringFromField(buf: []u8, field_name: []const u8, args: anytype) ![]const u8 {
+    const Fe = std.meta.FieldEnum(@TypeOf(args));
+    switch (std.meta.stringToEnum(Fe, field_name) orelse
+        panic("template field '{s}' missing from args", .{field_name})) {
+        inline else => |f| {
+            const field = @field(args, @tagName(f));
+            return switch (@typeInfo(@TypeOf(field))) {
+                .int => try std.fmt.bufPrint(buf, "{}", .{field}),
+                .pointer => |p| if (p.size == .slice) if (p.child == u8)
+                    field
+                else {
+                    panic("cannot use type {s} as string for field '{s}'", .{ @typeName(@TypeOf(field)), field_name });
+                } else {
+                    panic("cannot use type {s} for field '{s}'", .{ @typeName(@TypeOf(field)), field_name });
+                },
+                else => |info| panic("cannot use type {s} as string for field '{s}'", .{ @tagName(info), field_name }),
+            };
+        },
     }
-    return .{ .src = src, .instructions = try res.toOwnedSlice() };
+}
+
+fn resolveDynamicEventHandlerFromField(field_name: []const u8, args: anytype) !EventHandler {
+    const Fe = std.meta.FieldEnum(@TypeOf(args));
+    switch (std.meta.stringToEnum(Fe, field_name) orelse
+        panic("template field '{s}' missing from args", .{field_name})) {
+        inline else => |f| {
+            const field = @field(args, @tagName(f));
+            const Field = @TypeOf(field);
+            if (Field != EventHandler) {
+                panic("field '{s}' has type {s}, expected EventHandler", .{ field_name, @typeName(Field) });
+            }
+            return field;
+        },
+    }
+}
+
+fn renderDynamicTextNodeFromField(field_name: []const u8, args: anytype) !void {
+    const Fe = std.meta.FieldEnum(@TypeOf(args));
+    switch (std.meta.stringToEnum(Fe, field_name) orelse
+        panic("template field '{s}' missing from args", .{field_name})) {
+        inline else => |f| {
+            const field = @field(args, @tagName(f));
+            switch (@typeInfo(@TypeOf(field))) {
+                .int => tif("{}", .{field}),
+                .pointer => |p| if (p.size == .slice) {
+                    if (p.child == u8) {
+                        js.createTextImmediate(field.ptr, field.len);
+                        js.appendChildImmediate();
+                    } else {
+                        panic("field '{s}' of type {s} cannot be rendered as a text node", .{ field_name, @typeName(@TypeOf(field)) });
+                    }
+                } else panic("field '{s}' of type {s} cannot be rendered as a text node", .{ field_name, @typeName(@TypeOf(field)) }),
+                .@"struct" => if (@hasDecl(@TypeOf(field), "is_snap_renderable")) {
+                    renderEncodedTemplateInner(field.template, field.args);
+                } else if (@hasDecl(@TypeOf(field), "is_snap_renderable_action")) {
+                    try field.action(field.ctx);
+                } else panic("field '{s}' of type {s} cannot be rendered as a text node", .{ field_name, @typeName(@TypeOf(field)) }),
+                else => |info| panic("field '{s}' of type {s} cannot be rendered as a text node", .{ field_name, @tagName(info) }),
+            }
+        },
+    }
+}
+
+// Update the Renderable type to work with EncodedTemplate
+pub fn EncodedRenderable(T: type) type {
+    return struct {
+        template: template_encoder.EncodedTemplate,
+        args: T,
+
+        pub const is_snap_renderable = {};
+    };
+}
+
+pub fn encodedRenderable(template: template_encoder.EncodedTemplate, args: anytype) EncodedRenderable(@TypeOf(args)) {
+    return .{ .template = template, .args = args };
 }
