@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
     tests_run.step.dependOn(&snap_test_run.step);
     const e2e_test_cmd = b.addSystemCommand(&.{ "bun", "test" });
     e2e_test_cmd.step.dependOn(&copy_wasm.step);
-    const run_step = b.step("e2e-tests", "run browser tests.  depends on bun, puppeteer and puppeteer chrome being installed.");
+    const run_step = b.step("test-e2e", "run browser tests.  depends on bun, puppeteer and puppeteer chrome being installed.");
     run_step.dependOn(&e2e_test_cmd.step);
 }
 

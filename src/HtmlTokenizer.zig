@@ -144,7 +144,9 @@ fn nextInner(self: *Tokenizer, src: [:0]const u8) Token {
                         self.index += 1;
                     }
                     r.tag = .tag_name;
+                    r.span.end = self.index;
                     self.state = .tag_body;
+                    return r;
                 },
                 .tag_end_name => {
                     r.span.start = self.index;
@@ -163,16 +165,19 @@ fn nextInner(self: *Tokenizer, src: [:0]const u8) Token {
                     return r;
                 },
                 .tag_body => {
+                    while (std.ascii.isWhitespace(self.srcAt(src, 0))) {
+                        self.index += 1;
+                    }
                     if (self.srcAt(src, 0) == '>') {
                         self.index += 1;
                         continue :state .start;
                     } else if (self.srcAt(src, 0) == '/' and self.srcAt(src, 1) == '>') {
                         r.tag = .tag_self_close;
                         self.index += 2;
+                        self.state = .start;
                     } else {
                         continue :state self.tx(.attr_name, 0, &r);
                     }
-                    self.state = .start;
                 },
                 .attr_name => {
                     while (std.mem.indexOfScalar(u8, " \n\r\t=>/\x00", self.srcAt(src, 0)) == null) {
@@ -207,7 +212,7 @@ fn nextInner(self: *Tokenizer, src: [:0]const u8) Token {
                             self.index += 1;
                         }
                         r.tag = .attr_value;
-                        continue :state .tag_body;
+                        self.state = .tag_body;
                     },
                 },
                 .attr_value_quoted => {

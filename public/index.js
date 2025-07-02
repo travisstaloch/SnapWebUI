@@ -14,7 +14,6 @@ function stringFromMemory(ptr, len) {
 let memory;
 let instance;
 let elementCache = [];
-let elementEventHandlers = new Map(); // Map to store event handlers
 let cachedTextDecoder = null;
 let lastError = null;
 
@@ -22,17 +21,6 @@ let lastError = null;
 let nodeStack = []; // Stack for building DOM tree
 let currentParent = null;
 
-function stringFromMemory(ptr, len) {
-  if (!cachedTextDecoder) {
-    cachedTextDecoder = new TextDecoder("utf-8");
-  }
-  if (!memory) {
-    console.error("Memory not available in stringFromMemory, ptr:", ptr, "len:", len);
-    return "";
-  }
-  const result = cachedTextDecoder.decode(new Uint8Array(memory.buffer, ptr, len));
-  return result;
-}
 const wasm_url = document.currentScript.getAttribute("data-wasm-url");
 const wasm_init_method = document.currentScript.getAttribute("data-wasm-init-method");
 
@@ -102,29 +90,31 @@ async function init() {
               parentElement.childNodes[childIndex],
             );
           },
-          addEventListener: function (
-            element_id,
-            event_name_ptr,
-            event_name_len,
-            callback_ptr,
-            ctx_ptr,
-          ) {
-            const element_ref = elementCache[element_id];
-            const event_name = stringFromMemory(event_name_ptr, event_name_len);
+          // let elementEventHandlers = new Map(); // Map to store event handlers
 
-            // Store the callback and context for later use
-            if (!elementEventHandlers.has(element_id)) {
-              elementEventHandlers.set(element_id, new Map());
-            }
-            elementEventHandlers
-              .get(element_id)
-              .set(event_name, { callback_ptr, ctx_ptr });
+          // addEventListener: function (
+          //   element_id,
+          //   event_name_ptr,
+          //   event_name_len,
+          //   callback_ptr,
+          //   ctx_ptr,
+          // ) {
+          //   const element_ref = elementCache[element_id];
+          //   const event_name = stringFromMemory(event_name_ptr, event_name_len);
 
-            element_ref.addEventListener(event_name, (event) => {
-              // Call the zig function with the stored callback and context pointers
-              instance.exports.callZigCallback(callback_ptr, ctx_ptr, 0);
-            });
-          },
+          //   // Store the callback and context for later use
+          //   if (!elementEventHandlers.has(element_id)) {
+          //     elementEventHandlers.set(element_id, new Map());
+          //   }
+          //   elementEventHandlers
+          //     .get(element_id)
+          //     .set(event_name, { callback_ptr, ctx_ptr });
+
+          //   element_ref.addEventListener(event_name, (event) => {
+          //     // Call the zig function with the stored callback and context pointers
+          //     instance.exports.callZigCallback(callback_ptr, ctx_ptr, 0);
+          //   });
+          // },
           setAttribute: function (
             element_id,
             name_ptr,
@@ -237,7 +227,6 @@ async function init() {
       instance = results.instance;
       memory = results.instance.exports.memory;
       results.instance.exports[wasm_init_method]();
-      console.log("WASM init method called:", wasm_init_method);
     });
   }
 

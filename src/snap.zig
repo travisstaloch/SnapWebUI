@@ -1,26 +1,25 @@
 const std = @import("std");
 const mem = std.mem;
 const assert = std.debug.assert;
-pub const Tokenizer = @import("tokenizer.zig");
+pub const HtmlTokenizer = @import("HtmlTokenizer.zig");
 
 /// DOM node handle type
 pub const NodeId = enum(i32) { null = std.math.minInt(i32), _ };
 
 /// DOM event
 pub const EventHandler = struct {
-    name: []const u8,
     callback: *const Callback,
     ctx: *anyopaque,
     data: usize = 0,
 
     pub const Callback = fn (*anyopaque, data: usize) anyerror!void;
 
-    pub fn init(name: []const u8, callback: *const Callback, ctx: *anyopaque) EventHandler {
-        return .{ .name = name, .callback = callback, .ctx = ctx };
+    pub fn init(callback: *const Callback, ctx: *anyopaque) EventHandler {
+        return .{ .callback = callback, .ctx = ctx };
     }
 
-    pub fn initWithData(name: []const u8, callback: *const Callback, ctx: *anyopaque, data: usize) EventHandler {
-        return .{ .name = name, .callback = callback, .ctx = ctx, .data = data };
+    pub fn initWithData(callback: *const Callback, ctx: *anyopaque, data: usize) EventHandler {
+        return .{ .callback = callback, .ctx = ctx, .data = data };
     }
 
     pub fn format(self: EventHandler, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -150,7 +149,7 @@ pub const Node = union(enum) {
                 try writer.writeAll("], .events = [");
                 for (element.events, 0..) |event, i| {
                     if (i > 0) try writer.writeAll(", ");
-                    try writer.print("{{ .name = \"{s}\", .callback = {*}, .ctx = {*} }}", .{ event.name, event.callback, event.ctx });
+                    try writer.print("{{ .callback = {*}, .ctx = {*} }}", .{ event.callback, event.ctx });
                 }
                 try writer.writeAll("] }");
             },
@@ -424,6 +423,24 @@ pub fn querySelectorInnerHTML(selector: []const u8, buf: []u8) [:0]const u8 {
     return buf[0..len :0];
 }
 
+// TODO StaticStringMap
+fn isSelfClosingTag(tag: []const u8) bool {
+    return std.mem.eql(u8, tag, "area") or
+        std.mem.eql(u8, tag, "base") or
+        std.mem.eql(u8, tag, "br") or
+        std.mem.eql(u8, tag, "col") or
+        std.mem.eql(u8, tag, "embed") or
+        std.mem.eql(u8, tag, "hr") or
+        std.mem.eql(u8, tag, "img") or
+        std.mem.eql(u8, tag, "input") or
+        std.mem.eql(u8, tag, "link") or
+        std.mem.eql(u8, tag, "meta") or
+        std.mem.eql(u8, tag, "param") or
+        std.mem.eql(u8, tag, "source") or
+        std.mem.eql(u8, tag, "track") or
+        std.mem.eql(u8, tag, "wbr");
+}
+
 pub fn Renderable(T: type) type {
     return struct {
         template: ParsedTemplate,
@@ -469,7 +486,7 @@ pub fn renderTemplate(node_id: NodeId, r: anytype) void {
     // js.endRender();
 }
 
-const Span = Tokenizer.Span; // struct { start: u32, end: u32 };
+const Span = HtmlTokenizer.Span;
 
 fn resolveDynamicString(buf: []u8, spec_span: Span, r: anytype) ![]const u8 {
     var specname = spec_span.slice(r.template.src);
@@ -499,9 +516,11 @@ fn resolveDynamicString(buf: []u8, spec_span: Span, r: anytype) ![]const u8 {
 
 fn resolveDynamicEventHandler(spec_span: Span, r: anytype) !EventHandler {
     var specname = spec_span.slice(r.template.src);
+    // Remove curly braces if present
     if (specname.len >= 2 and specname[0] == '{' and specname[specname.len - 1] == '}') {
         specname = specname[1 .. specname.len - 1];
     }
+    // Remove "eh__" prefix
     if (mem.startsWith(u8, specname, "eh__")) specname = specname[4..];
 
     const Fe = std.meta.FieldEnum(@TypeOf(r.args));
@@ -554,8 +573,12 @@ pub fn renderTemplateInner(r: anytype) void {
                 const tag = span.slice(r.template.src);
                 js.createElementImmediate(tag.ptr, tag.len);
             },
-            // the current element is complete. append to parent.
-            .static_tag_close => js.appendChildImmediate(),
+            .static_tag_close => {
+                js.appendChildImmediate();
+            },
+            .self_closing_tag => {
+                js.appendChildImmediate();
+            },
             .static_text => |span| {
                 const text = span.slice(r.template.src);
                 js.createTextImmediate(text.ptr, text.len);
@@ -566,7 +589,9 @@ pub fn renderTemplateInner(r: anytype) void {
                 const value = attr[1].slice(r.template.src);
                 js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
             },
-            .dyn_text => |span| unwrapErr(renderDynamicTextNode(span, r)),
+            .dyn_text => |span| {
+                unwrapErr(renderDynamicTextNode(span, r));
+            },
             .static_dyn_attr => |spans| {
                 const name = spans[0].slice(r.template.src);
                 const value = spans[1];
@@ -584,9 +609,15 @@ pub fn renderTemplateInner(r: anytype) void {
                 const value = unwrapErr(resolveDynamicString(&buf2, spans[1], r));
                 js.setAttributeImmediate(name.ptr, name.len, value.ptr, value.len);
             },
-            .dyn_event => |span| {
-                const event = unwrapErr(resolveDynamicEventHandler(span, r));
-                js.addEventImmediate(event.name.ptr, event.name.len, @intFromPtr(event.callback), @intFromPtr(event.ctx), event.data);
+            .dyn_event => |spans| {
+                const attr_name_span = spans[0];
+                const event_handler_span = spans[1];
+
+                const attr_name = attr_name_span.slice(r.template.src);
+                const event_name = if (mem.startsWith(u8, attr_name, "on")) attr_name[2..] else attr_name;
+
+                const event = unwrapErr(resolveDynamicEventHandler(event_handler_span, r));
+                js.addEventImmediate(event_name.ptr, event_name.len, @intFromPtr(event.callback), @intFromPtr(event.ctx), event.data);
             },
         }
     }
@@ -596,6 +627,7 @@ pub const RenderInstruction = union(enum) {
     // For static parts of the template
     static_tag_open: Span,
     static_tag_close,
+    self_closing_tag,
     static_text: Span,
     static_attribute: [2]Span,
 
@@ -606,7 +638,7 @@ pub const RenderInstruction = union(enum) {
     /// name is dynamic, value is static
     dyn_static_attr: [2]Span,
     dyn_dyn_attr: [2]Span,
-    dyn_event: Span,
+    dyn_event: [2]Span,
 };
 
 pub const ParsedTemplate = struct {
@@ -614,97 +646,131 @@ pub const ParsedTemplate = struct {
     instructions: []RenderInstruction,
 };
 
+// Helper function to process and append pending attributes
+
+fn processPendingAttribute(
+    res_list: *std.ArrayList(RenderInstruction),
+    attr_name: ?Span,
+    attr_value: ?Span,
+    src: [:0]const u8,
+) !void {
+    if (attr_name) |name_span| {
+        const is_dyn_name = src[name_span.start] == '{' and src[name_span.end - 1] == '}';
+        const is_dyn_value = if (attr_value) |v|
+            src[v.start] == '{' and src[v.end - 1] == '}'
+        else
+            false;
+
+        const inst: RenderInstruction = if (is_dyn_name and is_dyn_value)
+            .{ .dyn_dyn_attr = .{ name_span, attr_value.? } }
+        else if (!is_dyn_name and is_dyn_value)
+            if (mem.startsWith(u8, attr_value.?.slice(src), "{eh__"))
+                .{ .dyn_event = .{ name_span, attr_value.? } }
+            else
+                .{ .static_dyn_attr = .{ name_span, attr_value.? } }
+        else if (is_dyn_name and !is_dyn_value)
+            .{ .dyn_static_attr = .{ name_span, if (attr_value) |v|
+                v
+            else
+                .{ .start = 0, .end = 0 } } }
+        else
+            .{ .static_attribute = .{ name_span, if (attr_value) |v|
+                v
+            else
+                .{ .start = 0, .end = 0 } } };
+
+        try res_list.append(inst);
+    }
+}
+
 pub fn parseTemplate(allocator: mem.Allocator, src: [:0]const u8) !ParsedTemplate {
     var res = std.ArrayList(RenderInstruction).init(allocator);
     errdefer res.deinit();
-    var tokenizer = Tokenizer{};
+    var tokenizer = HtmlTokenizer{};
     var last_attr_name: ?Span = null;
     var last_attr_value: ?Span = null;
+    var open_tag_name: ?Span = null;
 
     while (true) {
         const token = tokenizer.next(src);
-        log("{s}: {s}", .{ @tagName(token.tag), token.span.slice(src) });
+        // log("{s}: {s}", .{ @tagName(token.tag), token.span.slice(src) });
         switch (token.tag) {
             .eof, .invalid => break,
             .tag_name => {
-                log("tag_name '{s}'\n", .{token.span.slice(src)});
-                try res.append(.{ .static_tag_open = token.span });
-                // const i = mem.lastIndexOfNone(u8, src[0..tag_name.span.start], &std.ascii.whitespace) orelse 0;
-                // switch (src[i]) {
-                //     '<' => try res.append(.{ .static_tag_open = tag_name }),
-                //     '/' => try res.append(.static_tag_close),
-                //     else => std.debug.panic("is_close found unexpected character '{c}'", .{src[i]}),
-                // }
+                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+                last_attr_name = null;
+                last_attr_value = null;
 
-                // log("tag_name {s} is_close {}\n", .{ tag_name.slice(src), is_close });
+                if (open_tag_name) |tag_span| {
+                    if (isSelfClosingTag(tag_span.slice(src))) {
+                        try res.append(.self_closing_tag);
+                    }
+                }
+
+                // log("tag_name '{s}'", .{token.span.slice(src)});
+                try res.append(.{ .static_tag_open = token.span });
+                open_tag_name = token.span;
             },
-            .tag_end_name, .tag_self_close => try res.append(.static_tag_close),
+            .tag_end_name => {
+                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+                last_attr_name = null;
+                last_attr_value = null;
+
+                if (open_tag_name) |tag_span| {
+                    if (isSelfClosingTag(tag_span.slice(src))) {
+                        try res.append(.self_closing_tag);
+                    }
+                }
+                open_tag_name = null;
+                try res.append(.static_tag_close);
+            },
+            .tag_self_close => {
+                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+                last_attr_name = null;
+                last_attr_value = null;
+                try res.append(.self_closing_tag);
+                open_tag_name = null;
+            },
 
             .text => {
+                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+                last_attr_name = null;
+                last_attr_value = null;
+
+                if (open_tag_name) |tag_span| {
+                    if (isSelfClosingTag(tag_span.slice(src))) {
+                        try res.append(.self_closing_tag);
+                        open_tag_name = null;
+                    }
+                }
+
                 var sn = token.span;
                 while (mem.indexOfScalar(u8, sn.slice(src), '{')) |i| {
                     const p: Span = .{ .start = sn.start, .end = @intCast(sn.start + i) };
-                    log("prefix '{s}'\n", .{p.slice(src)});
                     try res.append(.{ .static_text = p });
                     const end: u32 = @intCast(mem.indexOfScalarPos(u8, sn.slice(src), i, '}').?);
                     const spec: Span = .{ .start = sn.start + i + 1, .end = @intCast(sn.start + end) };
-                    log("spec '{s}'\n", .{spec.slice(src)});
                     try res.append(.{ .dyn_text = spec });
                     sn.start = spec.end + 1;
                 }
                 if (sn.start != sn.end) try res.append(.{ .static_text = sn });
             },
             .attr_name => {
-                if (last_attr_name) |attr_name| {
-                    const is_dyn_name = src[attr_name.start] == '{' and src[attr_name.end - 1] == '}';
-                    const is_dyn_value = if (last_attr_value) |v|
-                        src[v.start] == '{' and src[v.end - 1] == '}'
-                    else
-                        false;
-
-                    log("attr {s}=\"{s}\" is_dyn {}/{}", .{
-                        attr_name.slice(src),
-                        if (last_attr_value) |v| v.slice(src) else "null",
-                        is_dyn_name,
-                        is_dyn_value,
-                    });
-
-                    const inst: RenderInstruction = if (is_dyn_name and is_dyn_value)
-                        .{ .dyn_dyn_attr = .{ attr_name, last_attr_value.? } }
-                    else if (!is_dyn_name and is_dyn_value)
-                        if (mem.startsWith(u8, last_attr_value.?.slice(src), "{eh__"))
-                            .{ .dyn_event = last_attr_value.? }
-                        else
-                            .{ .static_dyn_attr = .{ attr_name, last_attr_value.? } }
-                    else if (is_dyn_name and !is_dyn_value)
-                        .{ .dyn_static_attr = .{ attr_name, if (last_attr_value) |v|
-                            v
-                        else
-                            .{ .start = 0, .end = 0 } } }
-                    else
-                        .{ .static_attribute = .{ attr_name, if (last_attr_value) |v|
-                            v
-                        else
-                            .{ .start = 0, .end = 0 } } };
-
-                    try res.append(inst);
-                    last_attr_value = null;
-                }
+                try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+                last_attr_value = null;
                 last_attr_name = token.span;
             },
             .attr_value => last_attr_value = token.span,
 
-            // .parse_error => |parse_error| {
-            //     std.debug.panic("html parse error: {s}\n", .{parse_error});
-            //     @trap();
-            // },
             .doctype,
             .comment,
             => {},
-            // inline else => |payload, tag| {
-            //     log("TODO {s} {}\n", .{ @tagName(tag), payload });
-            //     @trap();
-            // },
+        }
+    }
+    try processPendingAttribute(&res, last_attr_name, last_attr_value, src);
+    if (open_tag_name) |tag_span| {
+        if (isSelfClosingTag(tag_span.slice(src))) {
+            try res.append(.self_closing_tag);
         }
     }
     return .{ .src = src, .instructions = try res.toOwnedSlice() };

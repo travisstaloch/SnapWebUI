@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+    <title>Snap Demo</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -20,15 +20,15 @@
         </div>
         <h3>Todos</h3>
         <div class="add-todo-section">
-          <input type=text placeholder="Description..." id="new-todo" value="{input}" oninput="{eh__onNewTodoInput}" />
+          <input type=text placeholder="Description..." id="new-todo" value="{input}" oninput="{eh__onNewTodoInput}">
           <button onclick="{eh__onAddTodoClick}">Add Todo</button>
         </div>
-        <ul>{todos}</ul>
+        <ul class="todo-list">{todos}</ul>
       </div>
     </template>
     <template id="todo-item-template">
       <li class="{class}">
-        <input id=todo{id} type=checkbox {checked} onchange="{eh__onTodoChange}" />
+        <input id=todo{id} type=checkbox {checked} onchange="{eh__onTodoChange}">
         <label for=todo{id}>{text}</label>
         <button onclick="{eh__onTodoDeleteClick}">Delete</button>
       </li>

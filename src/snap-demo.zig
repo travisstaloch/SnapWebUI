@@ -2,6 +2,7 @@ const std = @import("std");
 const snap = @import("snap");
 
 // TODO remove this.  only necessary because snap's superhtml dep does std.log.<level>() somewhere
+// TODO send pr to superhtml to disable logging by default so that this isn't needed
 pub fn logFn(
     comptime message_level: std.log.Level,
     comptime scope: @Type(.enum_literal),
@@ -58,10 +59,10 @@ const App = struct {
         snap.renderTemplate(self.root_element, snap.renderable(
             self.app_template,
             .{
-                .onDecClick = snap.eh("", &onDecClick, self),
-                .onIncClick = snap.eh("", &onIncClick, self),
-                .onNewTodoInput = snap.eh("", &onNewTodoInput, self),
-                .onAddTodoClick = snap.eh("", &onAddTodoClick, self),
+                .onDecClick = snap.eh(&onDecClick, self),
+                .onIncClick = snap.eh(&onIncClick, self),
+                .onNewTodoInput = snap.eh(&onNewTodoInput, self),
+                .onAddTodoClick = snap.eh(&onAddTodoClick, self),
                 .count = self.count.inner,
                 .input = self.input_text[0..self.input_len],
                 .todos = snap.renderableAction(&renderTodos, self, .{}),
@@ -73,8 +74,8 @@ const App = struct {
         const data: *App = @ptrCast(@alignCast(ctx));
         for (data.todos.items) |todo| {
             snap.renderTemplateInner(snap.renderable(data.todo_item_template, .{
-                .onTodoChange = snap.ehd("", &onTodoChange, data, todo.id),
-                .onTodoDeleteClick = snap.ehd("", &onTodoDeleteClick, data, todo.id),
+                .onTodoChange = snap.ehd(&onTodoChange, data, todo.id),
+                .onTodoDeleteClick = snap.ehd(&onTodoDeleteClick, data, todo.id),
                 .class = if (todo.completed) "todo-item completed" else "todo-item",
                 .id = todo.id,
                 .checked = if (todo.completed) "checked" else "data-unchecked",
@@ -148,11 +149,10 @@ fn initInner() !void {
     const alloc = std.heap.wasm_allocator;
     const app = try alloc.create(App);
     const root_element = snap.querySelector("#app");
-    // Use a buffer to read the HTML content
+    // buffer must be big enough to read template contents one at a time
     var template_buf: [4096]u8 = undefined;
     const asrc = try alloc.dupeZ(u8, snap.querySelectorInnerHTML("#app-template", &template_buf));
     const bsrc = try alloc.dupeZ(u8, snap.querySelectorInnerHTML("#todo-item-template", &template_buf));
-
     app.* = .{
         .root_element = root_element,
         .count = snap.useState(@as(i32, 0), app),
