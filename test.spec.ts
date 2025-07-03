@@ -86,7 +86,7 @@ test("puppeteer", async () => {
   expect(await todoList.evaluate(el => el.children.length)).toBe(0);
 
   // Test for multiple formats in one attr value
-  const dynamicClassDiv = await page.waitForSelector("#dynamic-class-test", { timeout: timeout });
+  const dynamicClassDiv = await page.waitForSelector("#multi-dynamic-attr-test", { timeout: timeout });
   expect(await dynamicClassDiv.evaluate(el => el.className)).toBe("foo bar");
 
   await browser.close();

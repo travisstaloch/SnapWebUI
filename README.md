@@ -1,16 +1,19 @@
-# Snap Wasm VDOM
+# SnapUI
 
-Reactive immediate DOM rendering with Wasm in Zig.  Compiles to a small WebAssembly binary.
+Write your web app in Zig in a reactive style. Compiles to WebAssembly binaries.
 
 ## Features
 
-- **DOM rendering**: simple immediate mode rendering
-- **Event System**: event handlers with callback support
-- **Reactive State**: state management with automatic re-rendering
-- **Templating**: with Zig std library formatting and `snap.renderTemplate()`
+-   **Immediate mode DOM rendering**: Efficiently update the UI based on your application state.
+-   **Event handling with callbacks**: Connect user interactions to Zig logic.
+-   **Reactive state management**:  Automatic re-rendering when your application state changes.
+-   **HTML Templating**: Parse templates in JavaScript, render from WebAssembly. Any HTML element can be a template and templates can be nested.
+-   **Dynamic HTML Attributes**: Control attributes like class names dynamically.
+-   **Partial DOM Updates**: Update only the changed parts of your UI.
+-   **Animation Support**: `requestAnimationFrame` integration.
 
 ## Examples
-See [`src/snap-demo.zig`](src/snap-demo.zig) for a demo app with a counter and todos.
+See [`public/index.html`](public/index.html) and [`src/snap-demo.zig`](src/snap-demo.zig) for a demo app with a counter, a todo app and more.
 
 ## Quick Start
 
@@ -18,39 +21,31 @@ See [`src/snap-demo.zig`](src/snap-demo.zig) for a demo app with a counter and t
 zig build --release=small
 python -m http.server
 ```
-open [localhost:8000](http://localhost:8000) in your browser
+Open [localhost:8000](http://localhost:8000) in your browser.
 
 ### Prerequisites
 - Zig 0.14.0 or later
 - A modern web browser
-
-## Architecture
-The library is designed around:
-
-1. **Virtual DOM**: Immutable tree structures representing UI state
-1. **Immediate Mode**: Direct DOM manipulation for simplicity
-1. **Event System**: Type-safe callbacks with context preservation
-1. **State Management**: Reactive updates triggering re-renders
 
 ## Contributing
 
 This project is in early development. Contributions welcome!
 
 1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure `zig build test` passes
-5. Submit a pull request
+1. Create a feature branch
+1. Add tests for new functionality
+1. Ensure `zig build test` passes
+1. Submit a pull request
 
 ## License
 
 MIT License - see LICENSE file for details.
 
-## Roadmap
+## Roadmap / Ideas
 
 - [ ] Component system architecture
 - [ ] Server-side rendering support
-- [ ] More comprehensive examples
+- [ ] WebAssembly module bundling / loading
 
 ---
 

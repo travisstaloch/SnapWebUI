@@ -1,14 +1,6 @@
 const std = @import("std");
 const snap = @import("snap");
 
-/// FIXME not working.  because of panics?
-pub fn returnErrorHook() void {
-    const st = @errorReturnTrace().?;
-    if (st.index == 0) {
-        snap.js.captureBacktrace();
-    }
-}
-
 const Todo = struct {
     id: u32,
     text: []const u8,
@@ -69,7 +61,7 @@ const App = struct {
 
         // Render the dynamic class test template
         try snap.renderEncodedTemplate(
-            snap.querySelector("#dynamic-class-container"),
+            snap.querySelector("#multi-dynamic-attr-container"),
             self.dynamic_class_template,
             .{
                 .class_part_1 = @as([]const u8, "foo"),
@@ -245,7 +237,7 @@ fn initInner() !void {
         .stress_table_template = try snap.encodeTemplateFromDOM(alloc, "#stress-table-template"),
         .stress_row_template = try snap.encodeTemplateFromDOM(alloc, "#stress-row-template"),
         .stress_cell_template = try snap.encodeTemplateFromDOM(alloc, "#stress-cell-template"),
-        .dynamic_class_template = try snap.encodeTemplateFromDOM(alloc, "#dynamic-class-template"),
+        .dynamic_class_template = try snap.encodeTemplateFromDOM(alloc, "#multi-dynamic-attr-template"),
     };
 
     try app.render();
@@ -253,4 +245,13 @@ fn initInner() !void {
 
 export fn init() void {
     snap.unwrapErr(initInner());
+}
+
+// log error traces
+// depends on modded std lib for now as discussed here https://github.com/ziglang/zig/issues/24285
+pub fn returnErrorHook() void {
+    const st = @errorReturnTrace().?;
+    if (st.index == 0) {
+        snap.js.captureBacktrace();
+    }
 }
