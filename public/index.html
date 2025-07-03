@@ -33,6 +33,9 @@
         <br>
         <button onclick="{eh__onToggleStressTest}">{stress_test_label}</button>
         <div class="stress-test-container">{stress_table}</div>
+
+        <h3>Dynamic Class Test</h3>
+        <div id="dynamic-class-container"></div>
       </div>
     </template>
     <template id="todo-item-template">
@@ -50,6 +53,10 @@
     <template id="stress-row-template"><tr>{stress_cells}</tr></template>
     <template id="stress-cell-template">
         <td style="border: 1px solid #ccc; padding: 4px 8px; text-align: center; font-family: monospace; font-size: 12px;">{value}</td>
+    </template>
+
+    <template id="dynamic-class-template">
+        <div id="dynamic-class-test" class="{class_part_1} {class_part_2}">Dynamic Class Test</div>
     </template>
 
     <div id="app"></div>

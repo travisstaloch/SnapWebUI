@@ -262,7 +262,7 @@ pub const js = struct {
     pub extern fn appendChildImmediate() void;
     pub extern fn endRender() void;
     // Template encoding functions
-    pub extern fn encodeTemplate(selector_ptr: [*]const u8, selector_len: usize, buffer_ptr: [*]u8, buffer_len: usize) usize;
+    pub extern fn encodeTemplate(buffer_ptr: [*]u8, buffer_len: usize) usize;
     pub extern fn getEncodedTemplateSize(selector_ptr: [*]const u8, selector_len: usize) usize;
     // Animation functions
     pub extern fn requestAnimationFrame(callback_ptr: usize, ctx_ptr: usize) u32;
@@ -400,7 +400,7 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
     js.consoleLog(msg.ptr, msg.len);
 }
 
-pub fn panicasdf(comptime fmt: []const u8, args: anytype) noreturn {
+pub fn panic(comptime fmt: []const u8, args: anytype) noreturn {
     if (!is_wasm) return;
     var buf: [4096]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
@@ -471,7 +471,7 @@ pub fn encodeTemplateFromDOM(allocator: mem.Allocator, selector: []const u8) !Ht
     const buffer = try allocator.alloc(u8, buffer_size);
     defer allocator.free(buffer);
 
-    const actual_size = js.encodeTemplate(selector.ptr, selector.len, buffer.ptr, buffer.len);
+    const actual_size = js.encodeTemplate(buffer.ptr, buffer.len);
     if (actual_size == 0) return error.EncodingFailed;
     if (actual_size != buffer_size) return error.EncodingMismatch;
 
@@ -545,8 +545,48 @@ pub fn renderEncodedTemplateInner(template: template_encoder.EncodedTemplate, ar
                 const event = try resolveDynamicEventHandlerFromField(handler_field, args);
                 js.addEventImmediate(event_name.ptr, event_name.len, @intFromPtr(event.callback), @intFromPtr(event.ctx), event.data);
             },
+            .dyn_attr_value_parts => {
+                const parts_ref = template.dyn_attr_value_part_refs[instruction.payload_index];
+                const parts_data = parts_ref.slice(template.dyn_attr_value_parts);
+                var attr_buf: [512]u8 = undefined;
+                const result = try resolveDynamicAttributeValueParts(&attr_buf, parts_data, template.strings, args);
+                js.setAttributeImmediate(result.name.ptr, result.name.len, result.value.ptr, result.value.len);
+            },
         }
     }
+}
+
+fn resolveDynamicAttributeValueParts(
+    buf: []u8,
+    parts_data: []const u8,
+    strings_buffer: []const u8,
+    args: anytype,
+) !struct { name: []const u8, value: []const u8 } {
+    var stream = std.io.fixedBufferStream(parts_data);
+    var reader = stream.reader();
+
+    const name_ref = try reader.readStruct(template_encoder.StringRef);
+    const name = name_ref.slice(strings_buffer);
+
+    const parts_count = try reader.readInt(u32, .little);
+
+    var value_writer = std.io.fixedBufferStream(buf);
+    var value_buf = value_writer.writer();
+
+    for (0..parts_count) |_| {
+        const part_type = try reader.readInt(u32, .little);
+        const part_ref = try reader.readStruct(template_encoder.StringRef);
+        const part_string = part_ref.slice(strings_buffer);
+
+        if (part_type == 0) { // Static part
+            try value_buf.writeAll(part_string);
+        } else { // Dynamic part
+            const dynamic_value = try resolveDynamicStringFromField(buf, part_string, args);
+            try value_buf.writeAll(dynamic_value);
+        }
+    }
+
+    return .{ .name = name, .value = value_writer.getWritten() };
 }
 
 // Helper functions for the new template system

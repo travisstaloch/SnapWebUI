@@ -35,6 +35,7 @@ const App = struct {
     stress_table_template: snap.HtmlTemplate,
     stress_row_template: snap.HtmlTemplate,
     stress_cell_template: snap.HtmlTemplate,
+    dynamic_class_template: snap.HtmlTemplate,
 
     pub fn render(self: *App) !void {
         _ = self.arena.reset(.retain_capacity);
@@ -63,6 +64,16 @@ const App = struct {
                 .stress_table = snap.renderableAction(&renderStressTable, self, .{}),
                 .onToggleAnimation = snap.eh(&onToggleAnimation, self),
                 .animation_label = @as([]const u8, if (self.animation_running) "Stop Animation" else "Start Animation"),
+            },
+        );
+
+        // Render the dynamic class test template
+        try snap.renderEncodedTemplate(
+            snap.querySelector("#dynamic-class-container"),
+            self.dynamic_class_template,
+            .{
+                .class_part_1 = @as([]const u8, "foo"),
+                .class_part_2 = @as([]const u8, "bar"),
             },
         );
     }
@@ -234,6 +245,7 @@ fn initInner() !void {
         .stress_table_template = try snap.encodeTemplateFromDOM(alloc, "#stress-table-template"),
         .stress_row_template = try snap.encodeTemplateFromDOM(alloc, "#stress-row-template"),
         .stress_cell_template = try snap.encodeTemplateFromDOM(alloc, "#stress-cell-template"),
+        .dynamic_class_template = try snap.encodeTemplateFromDOM(alloc, "#dynamic-class-template"),
     };
 
     try app.render();

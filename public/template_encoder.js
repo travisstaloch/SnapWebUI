@@ -9,6 +9,31 @@ function extractFieldName(str) {
     return match ? match[1] : str;
 }
 
+// Helper function to parse dynamic attribute values like "{part1} static {part2}"
+function parseDynamicAttributeValue(value) {
+    const parts = [];
+    let lastIndex = 0;
+    const dynamicRegex = /\{([^}]+)\}/g;
+    let match;
+
+    while ((match = dynamicRegex.exec(value)) !== null) {
+        // Add static part before the dynamic part
+        if (match.index > lastIndex) {
+            parts.push({ type: 'static', value: value.substring(lastIndex, match.index) });
+        }
+        // Add dynamic part
+        parts.push({ type: 'dynamic', value: match[1] });
+        lastIndex = match.index + match[0].length;
+    }
+
+    // Add any remaining static part
+    if (lastIndex < value.length) {
+        parts.push({ type: 'static', value: value.substring(lastIndex) });
+    }
+    return parts;
+}
+
+// TODO use 'eh__' prefix of attr value instead of 'on' prefix of attr name
 // Helper function to check if attribute is an event handler
 function isEventHandler(attrName) {
     return attrName.startsWith('on');
@@ -37,6 +62,8 @@ class TemplateEncoder {
         this.dynStaticAttrs = [];
         this.dynDynAttrs = [];
         this.dynEvents = [];
+        this.serializedDynAttrValueParts = []; // Stores raw serialized bytes for each part
+        this.dynAttributeValuePartRefs = []; // Stores StringRefs to serializedDynAttrValueParts
     }
     
     addString(str) {
@@ -125,6 +152,48 @@ class TemplateEncoder {
         this.dynEvents.push([eventRef, handlerRef]);
         this.addInstruction(9, payloadIndex); // dyn_event = 9
     }
+
+    addDynAttributeValueParts(name, parts) {
+        const SIZEOF_UINT32 = 4;
+        const SIZEOF_STRING_REF = 8;
+
+        // Calculate size for this specific attribute's parts
+        let currentPartSize = SIZEOF_STRING_REF; // For nameRef
+        currentPartSize += SIZEOF_UINT32; // For parts.length
+        currentPartSize += parts.length * (SIZEOF_UINT32 + SIZEOF_STRING_REF); // For each part (type + ref)
+
+        const tempBuffer = new ArrayBuffer(currentPartSize);
+        const tempView = new DataView(tempBuffer);
+        let tempOffset = 0;
+
+        // Write nameRef
+        const nameRef = this.addString(name);
+        tempView.setUint32(tempOffset, nameRef.offset, true); tempOffset += SIZEOF_UINT32;
+        tempView.setUint32(tempOffset, nameRef.len, true); tempOffset += SIZEOF_UINT32;
+
+        // Write parts.length
+        tempView.setUint32(tempOffset, parts.length, true); tempOffset += SIZEOF_UINT32;
+
+        // Write each part
+        for (const part of parts) {
+            tempView.setUint32(tempOffset, part.type === 'static' ? 0 : 1, true); tempOffset += SIZEOF_UINT32;
+            const partRef = this.addString(part.value);
+            tempView.setUint32(tempOffset, partRef.offset, true); tempOffset += SIZEOF_UINT32;
+            tempView.setUint32(tempOffset, partRef.len, true); tempOffset += SIZEOF_UINT32;
+        }
+
+        // Store the serialized part data and a reference to it
+        const serializedPart = new Uint8Array(tempBuffer);
+        const offset = this.serializedDynAttrValueParts.length;
+        for (let i = 0; i < serializedPart.length; i++) {
+            this.serializedDynAttrValueParts.push(serializedPart[i]);
+        }
+        
+        const ref = { offset, len: serializedPart.length };
+        const payloadIndex = this.dynAttributeValuePartRefs.length;
+        this.dynAttributeValuePartRefs.push(ref);
+        this.addInstruction(10, payloadIndex); // dyn_attribute_value_parts = 10
+    }
     
     encodeElement(element) {
         const tagName = element.tagName.toLowerCase();
@@ -151,8 +220,14 @@ class TemplateEncoder {
                 // Both name and value are dynamic
                 this.addDynDynAttr(extractFieldName(name), extractFieldName(value));
             } else if (!isNameDynamic && isValueDynamic) {
-                // Static name, dynamic value
-                this.addStaticDynAttr(name, extractFieldName(value));
+                const parsedValue = parseDynamicAttributeValue(value);
+                if (parsedValue.length > 1) {
+                    // Value has mixed static and dynamic parts
+                    this.addDynAttributeValueParts(name, parsedValue);
+                } else {
+                    // Static name, single dynamic value
+                    this.addStaticDynAttr(name, extractFieldName(value));
+                }
             } else if (isNameDynamic && !isValueDynamic) {
                 // Dynamic name, static value
                 this.addDynStaticAttr(extractFieldName(name), value);
@@ -167,8 +242,7 @@ class TemplateEncoder {
             this.encodeNode(child);
         }
         
-        // The Zig renderer handles both closing tags and self-closing tags
-        // with the same appendChildImmediate call.
+        // The Zig renderer handles both closing tags and self-closing tags the same way
         this.addStaticTagClose();
     }
     
@@ -227,6 +301,7 @@ class TemplateEncoder {
         const SIZEOF_UINT32 = 4;
         const SIZEOF_STRING_REF = 8;
         const ALIGN_OF_STRING_REF = 4;
+        const SIZEOF_ATTR_PART_REF = SIZEOF_UINT32 + SIZEOF_STRING_REF; // 12
 
         const align = (offset, alignment) => {
             return (offset + alignment - 1) & ~(alignment - 1);
@@ -237,7 +312,7 @@ class TemplateEncoder {
         let currentOffset = 0;
 
         // Header
-        layout.header = { offset: currentOffset, size: 10 * SIZEOF_UINT32 };
+        layout.header = { offset: currentOffset, size: 12 * SIZEOF_UINT32 };
         currentOffset += layout.header.size;
 
         // Instructions
@@ -266,6 +341,16 @@ class TemplateEncoder {
         layoutStringRefArray('dynDynAttrs', this.dynDynAttrs, true);
         layoutStringRefArray('dynEvents', this.dynEvents, true);
 
+        // New array for dynAttributeValuePartRefs
+        currentOffset = align(currentOffset, ALIGN_OF_STRING_REF);
+        layout.dynAttributeValuePartRefs = { offset: currentOffset, size: this.dynAttributeValuePartRefs.length * SIZEOF_STRING_REF };
+        currentOffset += layout.dynAttributeValuePartRefs.size;
+
+        // Raw serialized bytes for dynamic attribute value parts
+        // skip alignment here for bytes
+        layout.serializedDynAttrValueParts = { offset: currentOffset, size: this.serializedDynAttrValueParts.length };
+        currentOffset += layout.serializedDynAttrValueParts.size;
+
         const totalSize = currentOffset;
 
         // --- 2. Create buffer and write data ---
@@ -284,6 +369,8 @@ class TemplateEncoder {
         view.setUint32(headerOffset, this.dynStaticAttrs.length, true); headerOffset += 4;
         view.setUint32(headerOffset, this.dynDynAttrs.length, true); headerOffset += 4;
         view.setUint32(headerOffset, this.dynEvents.length, true); headerOffset += 4;
+        view.setUint32(headerOffset, this.dynAttributeValuePartRefs.length, true); headerOffset += 4; // New length
+        view.setUint32(headerOffset, this.serializedDynAttrValueParts.length, true); headerOffset += 4; // New length
 
         // Write instructions
         let instOffset = layout.instructions.offset;
@@ -329,6 +416,16 @@ class TemplateEncoder {
         writeArray('dynStaticAttrs', this.dynStaticAttrs, true);
         writeArray('dynDynAttrs', this.dynDynAttrs, true);
         writeArray('dynEvents', this.dynEvents, true);
+
+        // Write dynAttributeValuePartRefs
+        writeArray('dynAttributeValuePartRefs', this.dynAttributeValuePartRefs, false);
+
+        // Write serializedDynAttrValueParts
+        let serializedDynAttrValuePartsOffset = layout.serializedDynAttrValueParts.offset;
+        for (const byte of this.serializedDynAttrValueParts) {
+            view.setUint8(serializedDynAttrValuePartsOffset, byte);
+            serializedDynAttrValuePartsOffset += 1;
+        }
 
         return new Uint8Array(buffer);
     }
